@@ -88,6 +88,17 @@ The release pipeline starts manually, not on tag push, since releases
 deserve a conscious decision after seeing CI pass rather than
 happening automatically the moment a tag lands.
 
+**One-time setting first.** The release is started by filling in
+variables on the **New pipeline** form, and GitLab.com disables that for
+new projects (the default is "No one allowed", since GitLab 17.7). While it
+is disabled the form shows no variables at all, only an "Inputs" box that
+says there are none. In the main repository open **Settings → CI/CD →
+Variables**, set **Minimum role to use pipeline variables** to
+**Maintainer**, and click **Save changes** under that option. Only the
+Owner role can change this setting once it is set. It does not affect the
+four signing variables from section 3, which stay protected and are
+unrelated to this form.
+
 1. Push whatever commit you want to release to `main` (a tag isn't
    required to exist beforehand, the pipeline creates the GitLab release
    and its tag together).
@@ -128,6 +139,9 @@ matching the version, since `release-publish` creates the tag.
 
 ## 6. If a release run fails
 
+- **The New pipeline form shows no variables**: the project setting
+  **Minimum role to use pipeline variables** is on "No one allowed", see
+  the one-time setting at the start of section 4.
 - **Tag format rejected**: check the `release-validate` job's log, it
   prints the exact regex it expects.
 - **Keystore decode produces an empty file**: `RELEASE_KEYSTORE_BASE64`
