@@ -11,9 +11,9 @@ server works identically.
 
 This trips people up, so it's worth being explicit up front:
 
-- **The store manifest** (`manifest.json` at the root of your ROM
-  store) lists every available ROM and is what the app fetches over
-  the network. This is what this guide is about.
+- **The store manifest** (`manifest.json`, served at
+  `/roms/manifest.json`) lists every available ROM and is what the app
+  fetches over the network. This is what this guide is about.
 - **The `.vrom` internal manifest** is a *different* `manifest.json`,
   bundled *inside* each `.vrom` zip file, describing that one ROM's
   own contents. It's what powers local-file import (Home → ROMs →
@@ -33,12 +33,18 @@ files, but a simple one:
 
 ```text
 /var/www/vineos-roms/
-├── manifest.json
 └── roms/
+    ├── manifest.json
     ├── android-7.1.2-arm64.vrom
     ├── android-7.1.2-arm64.vrom.sha256
     └── ...
 ```
+
+The manifest sits next to the ROMs because the app and the website both
+request `/roms/manifest.json`. Older versions of this guide kept it one
+level up, at `/var/www/vineos-roms/manifest.json`. The nginx config in
+section 5.2 still serves that location as a fallback, but new setups
+should use the layout above.
 
 The `.sha256` sidecar files aren't required by the app, they're just
 handy for you to `sha256sum -c` against before publishing.
@@ -108,96 +114,110 @@ replace a `.vrom` file, a stale hash here means every install fails
 with a "SHA-256 verification failed" error and the partial download
 gets deleted.
 
-## 5. Deploying the website and ROM store
+## 5. Hosting: website on GitLab Pages, ROMs on your own server
 
-Both live on the same box, the website at `/` and the ROM store under
-`/roms/` and `/manifest.json`, on the same domain. Steps 5.1-5.2 are
-the same regardless of how you expose the box to the internet; 5.3
-covers Cloudflare Tunnel and direct nginx exposure separately since
-they genuinely differ.
+The website is deployed to GitLab Pages and the ROM store runs on your own
+box. Both answer on `vineos.hexadecinull.dpdns.org`, and the DNS record for
+that name stays pointed at GitLab Pages. Only the `/roms` path goes through
+a Cloudflare Tunnel:
 
-### 5.1 Put the files in place
+```text
+vineos.hexadecinull.dpdns.org/*         DNS record, then GitLab Pages (the website)
+vineos.hexadecinull.dpdns.org/roms/*    Cloudflare Worker, then Cloudflare Tunnel, then nginx on your box
+roms-origin.hexadecinull.dpdns.org      Tunnel hostname, only ever called by the Worker
+```
+
+A tunnel route on `vineos.hexadecinull.dpdns.org` with the path `/roms`
+cannot work on its own. Cloudflare creates a tunnel route by pointing the
+hostname's DNS record at the tunnel, which would replace the record that
+points at GitLab Pages, and a hostname can only have one DNS target. The
+setting that could split one hostname by path without code (an Origin Rule
+with a DNS record override) is Enterprise only, so a small Worker does that
+split instead. The app and the website keep using
+`https://vineos.hexadecinull.dpdns.org/roms/manifest.json`, so neither needs
+to change. If your box is offline the website stays up and the ROM list
+shows its "not live yet" message.
+
+Do the steps in order, since each one can be tested before the next.
+
+### 5.1 Put the ROM files in place
 
 ```bash
-sudo mkdir -p /var/www/vineos-site /var/www/vineos-roms/roms
+sudo mkdir -p /var/www/vineos-roms/roms
 
-# Website: copy the public/ folder from a clone of the VineOS-Website repo
-git clone https://gitlab.com/Hexadecinull/VineOS/VineOS-Website.git
-sudo rsync -a --delete VineOS-Website/public/ /var/www/vineos-site/
-
-# ROM store: .vrom files plus a manifest.json (run generate_manifest.py from a clone of the main VineOS repo)
+# .vrom files plus a manifest.json (run generate_manifest.py from a clone of the main VineOS repo)
 sudo cp path/to/*.vrom /var/www/vineos-roms/roms/
 python3 scripts/generate_manifest.py \
     --roms-dir /var/www/vineos-roms/roms \
     --base-url https://vineos.hexadecinull.dpdns.org/roms \
-    --output /var/www/vineos-roms/manifest.json
+    --output /var/www/vineos-roms/roms/manifest.json
 
-sudo chown -R www-data:www-data /var/www/vineos-site /var/www/vineos-roms
+sudo chown -R www-data:www-data /var/www/vineos-roms
 ```
 
 ### 5.2 nginx config
 
-Install nginx if it's not already there (`sudo apt install nginx`),
-then this config, adjust paths if you used different ones above:
+Install nginx if it's not already there (`sudo apt install nginx`), then
+save this as `/etc/nginx/sites-available/vineos`, adjusting paths if you
+used different ones above:
 
 ```nginx
 server {
     listen 80;
-    server_name vineos.hexadecinull.dpdns.org;
+    server_name roms-origin.hexadecinull.dpdns.org;
 
-    root /var/www/vineos-site;
-    index index.html;
+    root /var/www/vineos-roms;
 
-    location / {
-        try_files $uri $uri/ =404;
-    }
-
-    location /manifest.json {
-        alias /var/www/vineos-roms/manifest.json;
+    location = /roms/manifest.json {
+        try_files /roms/manifest.json /manifest.json =404;
         add_header Cache-Control "no-cache";
-        default_type application/json;
     }
 
     location /roms/ {
-        alias /var/www/vineos-roms/roms/;
         add_header Cache-Control "public, max-age=604800, immutable";
+    }
+
+    location / {
+        return 404;
     }
 }
 ```
 
-Save that as `/etc/nginx/sites-available/vineos`, then:
+Then enable it and reload:
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/vineos /etc/nginx/sites-enabled/
+sudo ln -sf /etc/nginx/sites-available/vineos /etc/nginx/sites-enabled/vineos
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-This deliberately listens on plain port 80 with no TLS block, that
-part depends on which of the two paths below you use.
+This server only serves `/roms/`, the website itself is not on this box.
+It listens on plain port 80 with no TLS block because the tunnel in 5.3
+reaches it over localhost and Cloudflare handles public TLS. Directory
+listing is off, so `/roms/` itself answers 403, which is expected. Range
+requests work out of the box, which is what lets interrupted ROM downloads
+resume.
 
-The website is plain static files (HTML, CSS, and JavaScript) with no
-build step, so deploying an update is `git pull` in the VineOS-Website
-clone followed by the same `rsync` command again. It fetches
-`/roms/manifest.json` client-side to list available ROMs (the path is
-set in `public/js/config.js`), so it'll show a "not live yet" empty state
-until 5.1's manifest is actually in place, that's expected and not a bug
-in either piece.
+Check it locally, this should print the manifest:
 
-`no-cache` on the manifest means clients always revalidate before
-using a cached copy, useful since you'll be editing it whenever you
-add a ROM. The long `max-age` on `/roms/` is safe specifically because
-`.vrom` filenames should be treated as immutable, if you update a ROM,
-give the new file a new name (e.g. bump a version suffix) rather than
-overwriting the old one in place, so any CDN or browser cache in front
-of it can't serve stale bytes under an unchanged URL.
+```bash
+curl -s -H 'Host: roms-origin.hexadecinull.dpdns.org' http://localhost/roms/manifest.json
+```
 
-### 5.3 Getting the domain online
+`no-cache` on the manifest means clients always revalidate before using a
+cached copy, useful since you'll be editing it whenever you add a ROM. The
+long `max-age` on `/roms/` is safe specifically because `.vrom` filenames
+should be treated as immutable. If you update a ROM, give the new file a
+new name (e.g. bump a version suffix) rather than overwriting the old one
+in place, so any CDN or browser cache in front of it can't serve stale
+bytes under an unchanged URL.
 
-**Path A: Cloudflare Tunnel** (what you're using). No port forwarding
-on your router, no certificate on the origin box at all, Cloudflare's
-edge handles public TLS and `cloudflared` makes an outbound-only
-connection from your Debian box to Cloudflare, so nothing needs to
-accept inbound connections from the internet directly.
+### 5.3 Cloudflare Tunnel
+
+No port forwarding on your router and no certificate on the origin box,
+`cloudflared` makes an outbound-only connection to Cloudflare, so nothing
+needs to accept inbound connections from the internet directly. The tunnel
+route here is the `/roms` path: only requests under `/roms/` are passed to
+nginx, everything else gets a 404.
 
 ```bash
 # on the Debian box
@@ -208,13 +228,11 @@ sudo apt-get update && sudo apt-get install cloudflared
 
 cloudflared tunnel login
 cloudflared tunnel create vineos
-cloudflared tunnel route dns vineos vineos.hexadecinull.dpdns.org
+cloudflared tunnel route dns vineos roms-origin.hexadecinull.dpdns.org
 ```
 
-That last command creates the DNS record in your Cloudflare dashboard
-automatically, a proxied (orange-cloud) CNAME to the tunnel, no manual
-DNS editing needed. Then point the tunnel at the nginx you just set up
-on port 80:
+That last command creates a proxied CNAME for `roms-origin` only. It does
+not touch the `vineos` record. Then write the config:
 
 ```bash
 sudo mkdir -p /etc/cloudflared
@@ -222,7 +240,8 @@ sudo tee /etc/cloudflared/config.yml << 'EOF'
 tunnel: vineos
 credentials-file: /root/.cloudflared/<TUNNEL-ID>.json
 ingress:
-  - hostname: vineos.hexadecinull.dpdns.org
+  - hostname: roms-origin.hexadecinull.dpdns.org
+    path: ^/roms/
     service: http://localhost:80
   - service: http_status:404
 EOF
@@ -231,32 +250,103 @@ sudo cloudflared service install
 sudo systemctl enable --now cloudflared
 ```
 
-(Swap `<TUNNEL-ID>` for the actual ID `cloudflared tunnel create` printed,
-or run `cloudflared tunnel list` to look it up again.) Traffic between
-`cloudflared` and Cloudflare's edge is already encrypted by the tunnel
-protocol itself, and `cloudflared`-to-nginx is on localhost, so plain
-HTTP for nginx here is fine, not a downgrade.
+Swap `<TUNNEL-ID>` for the actual ID `cloudflared tunnel create` printed, or
+run `cloudflared tunnel list` to look it up again.
 
-One thing worth knowing since you're already on Cloudflare: their
-dashboard also has a plain **Websites → DNS** flow that only needs a
-CNAME record if you'd rather not run a persistent tunnel daemon at
-all, pointing the subdomain at wherever the box is reachable and
-letting Cloudflare proxy it, but Tunnel is the better fit for a home
-server with no static IP or open ports, which sounds like your setup.
+If you already have this tunnel from an earlier setup, keep the first two
+lines of `config.yml` and replace only the `ingress` section:
 
-**Path B: direct exposure with certbot**. Needs port 80/443 forwarded
-to the box and a stable way for `vineos.hexadecinull.dpdns.org` to
-resolve to its public IP. Only relevant if you move away from
-Cloudflare Tunnel later:
+```bash
+sudo cp /etc/cloudflared/config.yml /etc/cloudflared/config.yml.bak
+sudo sed -i '/^ingress:/,$d' /etc/cloudflared/config.yml
+sudo tee -a /etc/cloudflared/config.yml << 'EOF'
+ingress:
+  - hostname: roms-origin.hexadecinull.dpdns.org
+    path: ^/roms/
+    service: http://localhost:80
+  - service: http_status:404
+EOF
+cloudflared tunnel route dns vineos roms-origin.hexadecinull.dpdns.org
+sudo systemctl restart cloudflared
+```
+
+A tunnel managed from the Cloudflare dashboard has no `config.yml` on the
+box, so skip the commands above and add the route there instead. Open
+Networking, Tunnels, your tunnel, Routes, Add route, Published application
+(older dashboards: Zero Trust, Networks, Tunnels, your tunnel, Public
+Hostname, Add a public hostname). Enter the subdomain `roms-origin` with the
+domain `hexadecinull.dpdns.org`, the service `http://localhost:80`, and if the
+form has a Path field, `^/roms/`. If it has none, leave it empty, nginx
+already answers 404 for everything outside `/roms/`. Check DNS, Records
+afterwards, Cloudflare normally creates the proxied `roms-origin` record
+itself. The running `cloudflared` picks the route up without a restart.
+
+Test it before moving on, this should print the manifest:
+
+```bash
+curl -s https://roms-origin.hexadecinull.dpdns.org/roms/manifest.json
+```
+
+### 5.4 The website on GitLab Pages
+
+1. In the VineOS-Website project, open Deploy, Pages, New Domain, and add
+   `vineos.hexadecinull.dpdns.org`. GitLab then shows the DNS records it
+   wants.
+2. In the Cloudflare DNS settings of the `hexadecinull.dpdns.org` zone,
+   create exactly those records. The `vineos` record must be **Proxied**
+   (orange cloud), otherwise the Worker in 5.5 never sees the request. The
+   verification TXT record stays as it is.
+3. Under SSL/TLS, Overview, set the encryption mode to **Full**. Flexible
+   mode loops forever against GitLab's HTTPS redirect.
+
+If the certificate for the domain stays pending in GitLab, switch the
+`vineos` record to DNS only until GitLab shows the domain as verified with
+a certificate, then switch the proxy back on.
+
+### 5.5 The Worker
+
+The Worker lives in the VineOS-Website repository, in `worker/`. It does
+one thing: for `/roms/*` it fetches the same path from
+`roms-origin.hexadecinull.dpdns.org` and streams the answer back, including
+range requests. Anything that is not `GET` or `HEAD` is refused.
+
+```bash
+git clone https://gitlab.com/Hexadecinull/VineOS/VineOS-Website.git
+cd VineOS-Website/worker
+npx wrangler login
+npx wrangler deploy
+```
+
+`wrangler.toml` already contains the route `vineos.hexadecinull.dpdns.org/roms/*`
+for the `hexadecinull.dpdns.org` zone and the `ORIGIN` variable. To do it
+from the dashboard instead, create a Worker named `vineos-roms-proxy`
+under Workers & Pages, paste in `worker.js`, add a text variable `ORIGIN`
+with the value `https://roms-origin.hexadecinull.dpdns.org`, then add the
+route `vineos.hexadecinull.dpdns.org/roms/*` under Settings, Domains &
+Routes. The free Workers plan is plenty for this.
+
+The Worker answers a plain-text `Not found` (404) for any path outside
+`/roms/`, including the root of its own `workers.dev` address, so that
+answer in the dashboard preview is expected and means the Worker is
+running. To test it before adding the route, open the `workers.dev` address
+Cloudflare shows on the Worker's page with `/roms/manifest.json` added at
+the end. That should print the manifest, and it checks the Worker, the
+tunnel and nginx without involving the `vineos` DNS record at all.
+
+### 5.6 Without Cloudflare Tunnel
+
+The Worker only needs an HTTPS URL to forward to, set as `ORIGIN`. If
+your box has a public IP and forwarded ports 80 and 443, skip 5.3, point a
+DNS record for `roms-origin.hexadecinull.dpdns.org` at it, and get a
+certificate with certbot:
 
 ```bash
 sudo apt install certbot python3-certbot-nginx
-sudo certbot --nginx -d vineos.hexadecinull.dpdns.org
+sudo certbot --nginx -d roms-origin.hexadecinull.dpdns.org
 ```
 
-certbot rewrites the nginx config in place to add the `443 ssl` block
-and a `80 → 443` redirect automatically, you don't need to hand-write
-that part.
+certbot rewrites the nginx config in place to add the `443 ssl` block and
+a `80 to 443` redirect, you don't need to hand-write that part.
 
 ## 6. Where the app points
 
@@ -281,7 +371,7 @@ the app actually verifies, and writes out a ready-to-serve
 python3 scripts/generate_manifest.py \
     --roms-dir /var/www/vineos-roms/roms \
     --base-url https://vineos.hexadecinull.dpdns.org/roms \
-    --output /var/www/vineos-roms/manifest.json
+    --output /var/www/vineos-roms/roms/manifest.json
 ```
 
 Re-run it any time you add, remove, or replace a `.vrom` file, it
@@ -292,10 +382,23 @@ the real file.
 ## 8. Testing before you point real users at it
 
 ```bash
-curl -s https://vineos.hexadecinull.dpdns.org/manifest.json | python3 -m json.tool
+curl -s https://vineos.hexadecinull.dpdns.org/roms/manifest.json | python3 -m json.tool
 ```
 
-confirms the manifest itself is valid JSON and reachable. Beyond that,
+confirms the manifest itself is valid JSON and reachable through the whole
+chain. If it isn't, what you see tells you where to look:
+
+| What `/roms/manifest.json` returns | Likely cause |
+|---|---|
+| A GitLab Pages 404 page | The Worker route is missing, or the `vineos` DNS record is DNS only |
+| A Cloudflare 502, 530 or 1033 error | The tunnel is down, check `sudo systemctl status cloudflared` on the box |
+| A Cloudflare 1016 error | The `roms-origin` DNS record or the tunnel route for it is missing |
+| A Cloudflare 1101 error | The Worker has no `ORIGIN` variable, add it under the Worker's Settings, Variables and Secrets |
+| A plain-text `Not found` | The path does not start with `/roms/`, expected for the root of the Worker's `workers.dev` address |
+| A plain nginx 404 page | `manifest.json` is missing from `/var/www/vineos-roms/roms/` |
+| A 403 on `/roms/` | Expected, directory listing is off |
+
+Beyond that,
 build a debug APK pointed at your `MANIFEST_URL`, and check the ROMs
 tab actually lists what you expect and that a full download completes
 and passes verification, that's the real end-to-end test.
@@ -308,8 +411,8 @@ value breaks every download outright, so it stays off until real pins
 are in).
 
 **Since you're using Cloudflare Tunnel, read this first:** with the
-domain proxied through Cloudflare (the orange-cloud DNS record
-`cloudflared tunnel route dns` created), the TLS connection the app
+domain proxied through Cloudflare (the orange-cloud `vineos` DNS record),
+the TLS connection the app
 actually makes terminates at **Cloudflare's edge**, not your origin
 box. Running the command below against `vineos.hexadecinull.dpdns.org`
 correctly captures whatever the app really sees, that part still
@@ -341,8 +444,8 @@ hash). Pin a **second, backup** value too, so a routine cert renewal
 doesn't lock the app out before you can ship an update, either:
 
 - run the same command against your certbot renewal's *next* cert if
-  you can get at it ahead of time (only applicable to the direct
-  exposure path, not Cloudflare Tunnel), or
+  you can get at it ahead of time (only applicable without
+  Cloudflare Tunnel, see 5.6), or
 - more simply, pin the intermediate or root certificate instead of
   (or alongside) the leaf, since those change far less often, whether
   it's Let's Encrypt's ~90-day leaf rotation or Cloudflare's own edge
