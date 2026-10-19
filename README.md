@@ -12,7 +12,7 @@ here is plain Markdown, rendered by GitLab.
 
 | Repository | What it contains |
 |---|---|
-| [VineOS](https://gitlab.com/Hexadecinull/VineOS/VineOS) | The Android app, the native runtime, and CI |
+| [VineOS](https://gitlab.com/Hexadecinull/VineOS/VineOS) | The Android app, the native runtime, the guest side ROM kit, and CI |
 | [VineOS-Website](https://gitlab.com/Hexadecinull/VineOS/VineOS-Website) | The project website |
 | [VineOS-Documentation](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation) | This repository |
 
@@ -21,7 +21,8 @@ here is plain Markdown, rendered by GitLab.
 For people who want to use, build, or release VineOS.
 
 - **[USAGE.md](guides/USAGE.md)**: how to use the app, downloading ROMs,
-  creating and running instances, settings, and troubleshooting.
+  creating and running instances, display settings, home screen shortcuts,
+  snapshots, and troubleshooting.
 - **[BUILDING.md](guides/BUILDING.md)**: building the Android app,
   cross-compiling `qemu-arm` for each supported host ABI, building AOSP ROM
   images, and the CI/CD pipeline.
@@ -35,8 +36,11 @@ For people who want to use, build, or release VineOS.
 For people who want to know how VineOS works.
 
 - **[ARCHITECTURE.md](reference/ARCHITECTURE.md)**: the Kotlin app layers,
-  the C++ native runtime, JNI bridge, instance lifecycle, display and input
-  pipelines, ABI compatibility, testing, and CI/CD.
+  the C++ engine and root helper, instance lifecycle, display and input
+  pipelines, storage, networking, ABI compatibility, testing, and CI/CD.
+- **[ROM_INTEGRATION.md](reference/ROM_INTEGRATION.md)**: the contract between
+  the engine and a ROM: boot properties, the init marker, the framebuffer,
+  the guest agent, and what is still unproven.
 - **[NOROOT_RESEARCH.md](reference/NOROOT_RESEARCH.md)**: what Wireless
   Debugging and Shizuku can and can't unlock, toward a no-root path.
 

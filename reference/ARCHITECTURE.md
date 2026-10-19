@@ -1,19 +1,25 @@
 # Architecture
 
-This describes how VineOS is put together: the Kotlin app layers, the C++
-native runtime, and how they talk to each other. For setup instructions see
-[BUILDING.md](../guides/BUILDING.md); for what the app does from a user's point of
-view see [USAGE.md](../guides/USAGE.md).
+This describes how VineOS is put together: the Kotlin app layers, the two
+native pieces, and how they talk to each other and to the guest. For setup
+instructions see [BUILDING.md](../guides/BUILDING.md); for what the app does from
+a user's point of view see [USAGE.md](../guides/USAGE.md); for what a ROM must
+provide see [ROM_INTEGRATION.md](ROM_INTEGRATION.md).
 
 ## Table of Contents
 
 - [High-level overview](#high-level-overview)
 - [Kotlin app layers](#kotlin-app-layers)
-- [Native runtime (C++)](#native-runtime-c)
-- [JNI bridge](#jni-bridge)
+- [Native pieces (C++)](#native-pieces-c)
+- [The root helper protocol](#the-root-helper-protocol)
+- [Instance directory layout](#instance-directory-layout)
 - [Instance lifecycle, start to stop](#instance-lifecycle-start-to-stop)
+- [Guest root and namespaces](#guest-root-and-namespaces)
 - [Display pipeline](#display-pipeline)
-- [Input pipeline](#input-pipeline)
+- [Input and the guest agent](#input-and-the-guest-agent)
+- [Home screen shortcuts](#home-screen-shortcuts)
+- [Storage and snapshots](#storage-and-snapshots)
+- [Networking](#networking)
 - [ABI compatibility](#abi-compatibility)
 - [Data storage](#data-storage)
 - [Security model](#security-model)
@@ -25,28 +31,37 @@ view see [USAGE.md](../guides/USAGE.md).
 A VineOS "instance" is a full, separate Android system image (a ROM,
 packaged as a `.vrom` file) running inside a Linux namespace container on
 the host device. VineOS is not a hypervisor: the guest kernel is the same
-kernel as the host's. Isolation comes from PID, mount, UTS, and IPC
-namespaces, plus a loop-mounted rootfs image, similar in spirit to how a
-container runtime like `runc` isolates a process tree, adapted for running
-a full Android `init` as the containerized process.
+kernel as the host's. Isolation comes from PID, mount, UTS, IPC and network
+namespaces plus cgroup limits and loop-mounted images, similar in spirit to
+how a container runtime like `runc` isolates a process tree, adapted for
+running a full Android `init` as the containerized process.
+
+Starting a container needs privilege the app does not have. The app
+therefore ships a second native binary, the **root helper**, which it starts
+with `su`. The helper owns every guest. The app talks to it over the helper's
+stdin and stdout, and gets guest frames straight from a shared memory file.
 
 ```text
-┌─────────────────────────────────────────────────────────┐
-│ Host Android app (this repo)                             │
-│                                                            │
-│  Compose UI  →  ViewModels  →  VineVMManager (domain)     │
-│                                      │                     │
-│                                 VineRuntime (JNI bridge)   │
-└──────────────────────────────────────┼────────────────────┘
-                                        │
-┌───────────────────────────────────────┼────────────────────┐
-│ Native runtime (libvine_runtime.so)   │                     │
-│                                        ▼                     │
-│  NamespaceManager → Container  →  guest Android init (PID 1) │
-│  UInputBridge      (touch/key events into the guest)         │
-│  FramebufferBridge (guest display out to a host Surface)     │
-│  qemu::verify_qemu_binary (32-bit ARM guest support)          │
-└────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│ VineOS app process (no root)                                  │
+│                                                                │
+│  Compose UI → ViewModels → VineVMManager ──► HelperClient      │
+│                                │                  │ stdin/out  │
+│                          DisplayBridge            │            │
+│                      (libvine_runtime.so)         │            │
+└───────────────────────────────┼───────────────────┼────────────┘
+                                │ mmap, read only   │
+┌───────────────────────────────┼───────────────────┼────────────┐
+│ libvine_helper.so (root, started with su)         ▼            │
+│                                                                │
+│  HelperServer → Container (one per instance) → AgentLink       │
+│                      │                              │          │
+└──────────────────────┼──────────────────────────────┼──────────┘
+                       │ namespaces, mounts           │ unix socket
+┌──────────────────────▼──────────────────────────────▼──────────┐
+│ Guest: Android init (PID 1) · guest agent · display writer      │
+│ /vine ◄── <instance>/shared (vinefb, agent.sock, boot.prop)     │
+└────────────────────────────────────────────────────────────────┘
 ```
 
 ## Kotlin app layers
@@ -56,94 +71,251 @@ a full Android `init` as the containerized process.
 | UI | `ui.screens`, `ui.components`, `ui.theme` | Jetpack Compose screens and widgets, Material You theming |
 | Navigation | `ui.navigation` | `NavHost` route definitions |
 | ViewModel | `ui.viewmodel` | Hilt-injected `ViewModel`s exposing `StateFlow` to the UI |
-| Domain | `domain.VineVMManager` | Orchestrates VM start/stop, owns per-instance native handles and status flows |
-| Data (models) | `data.models` | `VMInstance`, `ROMImage`, `DownloadProgress`, `AbiCompat` |
-| Data (repository) | `data.repository` | `InstanceRepository` (Room), `ROMRepository` (network + file management), `AppPreferences` (DataStore), `VineDatabase` |
+| Domain | `domain.VineVMManager` | Starts and stops instances through the helper, owns per-instance status flows and the foreground service count |
+| Domain | `domain.InstanceProvisioner` | Unpacks a `.vrom` into a new instance directory with progress and a free space check |
+| Domain | `domain.DisplayPlanner`, `domain.StorageSizing` | Pure logic: guest resolution and DPI from the phone's screen, and the disk size choices |
+| Domain | `domain.shortcuts` | App list and icon cache, pinned shortcut creation, shortcut launch handling |
+| Helper client | `helper.HelperLauncher`, `HelperClient`, `HelperProtocol`, `GuestProtocol` | Builds the `su` command line, speaks the helper protocol, formats guest agent lines |
+| Data (models) | `data.models` | `VMInstance`, `ROMImage`, `DownloadProgress`, `AbiCompat`, `DisplaySettings` |
+| Data (repository) | `data.repository` | `InstanceRepository` (Room), `ROMRepository` (network and files), `AppPreferences` (DataStore), `VineDatabase` |
 | Native bridge | `native.VineRuntime` | `external fun` declarations mapping 1:1 to JNI exports |
-| Service | `service.VineService` | Foreground service keeping a running instance alive |
+| Service | `service.VineService` | Foreground service keeping the process alive while an instance runs |
+| Shizuku | `shizuku` | Optional probe of what ADB-level privilege can do |
 
 Screens are stateless composables that take a `ViewModel`'s exposed state
 and callbacks as parameters; each `ViewModel` is the only thing that talks
 to `VineVMManager` or the repositories, so UI code never touches Room,
-DataStore, or JNI directly.
+DataStore, the helper or JNI directly.
 
-## Native runtime (C++)
+## Native pieces (C++)
 
-All native code lives under `app/src/main/cpp/`, compiled as a single
-shared library, `libvine_runtime.so`, per the `CMakeLists.txt` build
-graph. It's built for four host ABIs: `arm64-v8a`, `armeabi-v7a`, `x86_64`,
-and `x86` (see [ABI compatibility](#abi-compatibility)).
+All native code lives under `app/src/main/cpp/` and builds into two
+artifacts per host ABI (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`), plus a
+static library of the shared engine code. See
+[ABI compatibility](#abi-compatibility).
+
+| Artifact | What it is | Runs as |
+|---|---|---|
+| `libvine_runtime.so` | JNI library: host probes and the display bridge | The app, no root |
+| `libvine_helper.so` | An executable named like a library so Android extracts it to the native library directory. It holds the container engine and the helper server | Root, started with `su -c exec` |
+| `vine_core` (static) | The sources both of the above and the host tests share | n/a |
 
 | Module | Files | Responsibility |
 |---|---|---|
-| Container | `container/namespace_manager.{h,cpp}` | Linux namespace setup, rootfs mount, binfmt_misc registration, launching guest `init` |
-| Display | `display/framebuffer_bridge.{h,cpp}` | Reads the guest framebuffer, converts pixel formats, renders to a host `ANativeWindow` |
-| Input | `input/uinput_bridge.{h,cpp}` | Virtual touchscreen and keyboard via the Linux `uinput` subsystem |
-| QEMU bridge | `qemu_bridge/qemu_launcher.cpp` | Validates the bundled `qemu-arm` static binary before use |
-| Utils | `utils/vine_utils.{h,cpp}`, `utils/vine_log.h` | Filesystem helpers, process exec/wait helpers, AArch32 detection, logging macros |
-| JNI entry | `vine_runtime.cpp` | All `Java_com_hexadecinull_vineos_native_VineRuntime_*` exports |
+| Container | `container/namespace_manager.*` | The `Container` lifecycle, namespaces, mounts, cgroups, binder, binfmt, init launch, status polling |
+| Container | `container/boot_props.*`, `ramdisk.*`, `sparse_image.*`, `loop_mount.*`, `net_setup.*`, `guest_exec.*` | Boot properties, cpio ramdisk extraction, sparse image expansion, loop mounts, veth and NAT, running a command inside a guest |
+| Helper | `helper/helper_server.*`, `helper_main.cpp`, `agent_link.*` | The protocol server on stdin and stdout and the link to a guest's agent |
+| Display | `display/vinefb*.{h,cpp}`, `pixel_convert.*`, `display_bridge.*` | The framebuffer contract, tear-free reads, pixel conversion, drawing onto a `Surface` |
+| Diagnostics | `diagnostics/*` | What the kernel offers (namespaces, binder, cgroups, loop, SELinux, AArch32) |
+| QEMU bridge | `qemu_bridge/qemu_launcher.cpp` | Locates the bundled `qemu-arm` binary |
+| Utils | `utils/*` | Files, processes, sparse copies, AArch32 detection, line escaping, logging |
+| JNI entry | `vine_runtime.cpp` | The `Java_com_hexadecinull_vineos_native_VineRuntime_*` exports |
 
-`NamespaceManager` is a process-wide singleton owning a handle-to-`Container`
-map; handles are `int64_t` values (safe to pass as a JNI `jlong`), not raw
-pointers, so the Kotlin side never holds anything that could dangle.
+The same sources compile with plain `g++` on a Linux host, which is how the
+native tests run. See [Testing strategy](#testing-strategy).
 
-## JNI bridge
+## The root helper protocol
 
-`VineRuntime.kt` and `vine_runtime.cpp` mirror each other one-to-one: every
-`external fun` in the Kotlin object has a matching `JNIEXPORT` function.
-`vine_runtime.cpp` keeps a small `InstanceRuntime` struct per active
-instance (its `Container*`, `FramebufferBridge`, and `UInputBridge`) in a
-`std::unordered_map` keyed by the same handle `NamespaceManager` hands out,
-so a single JNI call site can reach all three subsystems for a given
-instance without extra lookups.
+The app starts the helper with `su` and talks to it over the process's stdin
+and stdout, so no other process can reach it. One line per message, tab
+separated, with backslash escapes for `\n`, `\r`, `\t` and `\\`:
+
+| Kind | Form |
+|---|---|
+| Request | `id TAB command TAB arg ...` |
+| Reply | `id TAB ok\|err TAB payload` |
+| Event | `* TAB name TAB field ...` |
+
+A request with the id `-` gets no reply, which is how touch events travel.
+
+| Command | Purpose |
+|---|---|
+| `hello`, `probe`, `diag` | Version handshake, device report, per-instance state and boot log tail |
+| `start`, `stop`, `kill`, `pause`, `resume`, `status`, `list` | Guest lifecycle. `start` takes `key=value` options: RAM, CPU cores, data size, resolution, DPI, network mode, 32-bit support |
+| `exec` | Run a command inside a running guest |
+| `agent`, `agent_send` | Send a line to the guest agent, with or without waiting for the reply |
+| `apps`, `launch`, `icon` | Guest app list, open an app, an app's icon as PNG |
+| `snapshot`, `restore`, `snapshots`, `delete_snapshot` | `/data` disk snapshots |
+| `rmtree`, `quit` | Delete an instance directory the helper created, shut down |
+
+| Event | Meaning |
+|---|---|
+| `ready` | The helper is up and tells the app which uid it runs as |
+| `state` | An instance went to booting, running, paused, stopped or error, with a detail text |
+| `snapshot`, `restore` | A snapshot job finished, with success or the failure text |
+
+Every path the app sends must lie under the instances directory the helper
+was started with (`--base`). The helper refuses anything else. When the app
+process or the helper's stdin goes away, every guest is killed with it.
+
+## Instance directory layout
+
+Everything for one instance lives under `filesDir/instances/<id>/`:
+
+| Path | Contents |
+|---|---|
+| `manifest.json` | The `.vrom`'s own manifest, copied at creation |
+| `ramdisk.img` | gzip cpio with `/init` and the init `.rc` files |
+| `system.img`, `vendor.img` | Read-only images, mounted at `/system` and `/vendor`. Android sparse images are expanded on first start |
+| `data.img` | Sparse ext4 disk, mounted at `/data`. Created on first start |
+| `rootfs/` | The extracted ramdisk, the guest's `/` |
+| `shared/` | The folder shared with the guest as `/vine`: `vinefb`, `boot.prop`, `cmdline`, `agent.sock`, `boot_completed` |
+| `snapshots/` | `<name>.img` copies of `data.img` |
+| `boot.log` | Output of the supervisor and of init's console |
+
+The app keeps the app list and icons it read from a guest separately in
+`filesDir/app_cache/<id>/`.
 
 ## Instance lifecycle, start to stop
 
-1. UI calls `VineVMManager.startInstance(instance)`.
-2. `VineVMManager` starts `VineService` as a foreground service (required
-   for a long-running background process on modern Android), then calls
-   `VineRuntime.startInstance(...)`.
-3. JNI forwards to `NamespaceManager::start_container`, which constructs a
-   `Container` and calls `Container::start()`:
-   - loop-mounts the `.vrom` rootfs image
-   - sets up bind mounts and `/dev` nodes
-   - if the host lacks AArch32 support and the guest needs it, registers
-     `qemu-arm` with `binfmt_misc` so 32-bit ELFs are transparently
-     executed through QEMU inside the container's mount namespace
-   - execs the guest's Android `init` as PID 1 inside the new namespaces
-4. `VineVMManager` polls `VineRuntime.getInstanceStatus` every two seconds
-   on a background coroutine and republishes it as a `StateFlow<VMStatus>`
-   that the UI collects.
-5. Stopping sends `SIGTERM` to guest `init` and waits up to the configured
-   timeout before falling back to `SIGKILL`; `VineService` stops itself once
-   no instances remain running.
+1. The UI calls `VineVMManager.startInstance`.
+2. `VineVMManager` makes sure the helper is running (`su` prompt on the
+   first use), reads the `.vrom` manifest to decide if 32-bit emulation is
+   needed, asks `DisplayPlanner` for the guest resolution and sends `start`.
+3. The helper's `Container` prepares the instance: expands sparse images,
+   extracts the ramdisk into `rootfs/` and checks that its `init` carries the
+   container marker, formats `data.img` as sparse ext4 on the first start,
+   creates `shared/vinefb` with its header and writes `boot.prop`, `cmdline`
+   and a managed block in the ramdisk's `default.prop`.
+4. A supervisor process forks the guest as PID 1 of new PID, UTS, IPC,
+   network and mount namespaces (see
+   [Guest root and namespaces](#guest-root-and-namespaces)). The host side
+   of the network and the cgroup limits are set up, and the 32-bit
+   `binfmt_misc` rule is registered when the guest needs it.
+5. While booting, the helper polls the container. The instance becomes
+   *running* when the guest creates `shared/boot_completed`, or when the
+   first frame shows up in `vinefb`. If neither happens before the boot
+   timeout it is treated as running anyway so the screen is visible.
+6. The helper pushes a `state` event on every change, the app updates its
+   `StateFlow<VMStatus>` and, through `VineService`, a foreground
+   notification keeps the process alive while any instance is active.
+7. Stopping sends `SIGTERM` to the guest's init and waits before falling back
+   to `SIGKILL`. When no instance has been active for a minute the helper is
+   shut down too.
+8. If the app is killed or the helper dies, the kernel kills every guest with
+   it. On the next start the app resets all stored statuses to stopped, since
+   nothing can still be running.
+
+## Guest root and namespaces
+
+The guest's root is built inside its own mount namespace, so none of it is
+visible to the phone:
+
+| Mount | Source |
+|---|---|
+| `/system`, `/vendor` | Loop-mounted images, read only, with ext4, erofs, squashfs or f2fs tried in turn. The loop devices are autoclear, so they vanish with the namespace |
+| `/data` | `data.img` (or a host folder when `mke2fs` is missing) |
+| `/cache` | A 64 MB tmpfs |
+| `/proc` | The guest's own PID namespace. `/proc/sys`, `irq`, `bus` and sysrq are bound read only, `kcore` and `kmsg` are blanked, `cmdline` is replaced by `shared/cmdline` |
+| `/sys` | Read only |
+| `/dev` | A small tmpfs with `null`, `zero`, `full`, `random`, `urandom`, `tty`, `fuse`, `pts`, `ptmx`, `console`, `ashmem` when the phone has it, and the binder devices |
+| `/vine` | `shared/` |
+
+Binder comes from a private `binderfs` instance when the kernel supports it,
+otherwise from Anbox style extra binder devices when the phone has them, and
+otherwise the guest has none and the log says so. The container then
+`pivot_root`s into the new root (or moves it over the root when the host's own
+root cannot be pivoted) and executes `/init` with a clean file descriptor
+table and a small environment. A guest `init` without the marker
+`VINE_CONTAINER_INIT_V1` is refused, because an unpatched Android `init` would
+load its SELinux policy into the phone's kernel.
+
+The container has **no user namespace**. Root inside the guest is root on
+the phone, restricted only by the mounts, the namespaces and the cgroup
+limits. That is a deliberate trade for working loop mounts and binder on stock kernels, and it
+is why only ROMs you trust should run. See the
+[security model](#security-model).
+
+Memory and CPU limits come from cgroups: `memory.max` and `cpu.max` on
+cgroup v2 or `memory.limit_in_bytes` and `cpu.cfs_quota_us` on v1. Pausing
+an instance freezes its cgroup.
 
 ## Display pipeline
 
-When `VMDisplayScreen` attaches its `Surface` (`VineRuntime.attachSurface`),
-`FramebufferBridge::open()` mmaps the guest's virtual framebuffer device and
-queries its real geometry, then a background render thread
-(`FramebufferBridge::render_frame`, looped from `startRendering`) copies
-each frame into the host `ANativeWindow` buffer, converting RGB565 to
-RGBA8888 when the guest framebuffer format requires it. Frame pacing is
-driven by `AChoreographer`, the host's real vsync signal, rather than a
-fixed sleep interval, so the render thread draws exactly once per display
-refresh instead of guessing at a frame budget.
+The display contract is a shared memory file, `vinefb`, created by the
+engine in `shared/` before the guest starts. It has a 64 byte header
+(magic, version, size, stride, pixel format, capacity and a frame counter)
+followed by pixels from offset 4096. The guest's graphics stack writes
+finished frames with a sequence counter that is odd while it writes and even
+when the frame is complete, so a reader that copies a frame and sees the same
+even value before and after has a tear-free picture. The full contract is in
+[ROM_INTEGRATION.md](ROM_INTEGRATION.md).
 
-## Input pipeline
+When `VMDisplayScreen` attaches its `Surface`, `DisplayBridge` maps the file
+read-only and starts a render thread. While frames arrive it follows the
+display's vsync through `AChoreographer`. When the guest screen is still it
+drops to a slow check, so an idle screen costs almost no CPU. Pixels are
+converted to `RGBA_8888` as needed (including `RGB565`) and the `Surface` is
+given the guest's own resolution, so the system compositor does the scaling
+and no pixel is resized in app code.
 
-Touch and key events from Compose's `pointerInput`/`KeyEvent` handlers go
-through `VMDisplayViewModel` to `VineRuntime.sendTouchEvent` /
-`sendKeyEvent` (JNI), which reach the instance's `UInputBridge` directly;
-`Container` itself is not on this path. On the first event for an
-instance, `UInputBridge` is still using a generic placeholder resolution;
-`vine_runtime.cpp` syncs in the framebuffer's real queried geometry (via
-`UInputBridge::set_screen_size`) before the virtual `uinput` device is
-created, so touch coordinates map onto the guest's actual screen. Key
-events are translated from Android `KeyEvent.KEYCODE_*` constants to Linux
-`KEY_*` codes (`UInputBridge::android_to_linux_keycode`) before being
-written to `/dev/uinput`; the guest's `InputReader` then sees VineOS's
-virtual device exactly like a real hardware touchscreen.
+`DisplayPlanner` chooses the guest resolution before the start: either the
+phone's own aspect ratio (so the guest fills the screen) or the largest 9:16
+rectangle that fits, capped by the quality setting (long side 1920, 1280 or
+960) and rounded to multiples of 8. The DPI follows from the width.
+`VMDisplayScreen` hides the system bars while an instance is shown and does
+not apply the app's window insets, which removes the empty strips around the
+guest.
+
+## Input and the guest agent
+
+Input does not use `uinput`. The app sends compact text lines to a small
+**guest agent** that runs inside the ROM and injects real Android input
+events:
+
+```text
+touch <action> <actionIndex> <n> <id> <x> <y> ...   x and y are fractions 0..1
+key <keycode> <1|0>
+text <escaped text>
+```
+
+These three get no reply. `VMDisplayScreen` collects every active pointer
+(up to ten) and `VineVMManager` sends them through the helper's
+`agent_send`, dropping move events when the link is busy. Normalized
+coordinates mean the app never needs to know the guest's resolution. The
+agent also answers request and reply commands (`ping`, `apps`, `launch`,
+`icon`, `clip`), whose replies end with a line holding a single `.`. Without
+an agent, hardware keys fall back to the guest's own `input keyevent` tool
+through `exec`, and touch is unavailable.
+
+## Home screen shortcuts
+
+Each pinned shortcut is a launcher shortcut with the id
+`app:<instanceId>:<package>`, the app's name as its label and, when the app
+icon was fetched, that icon. Its intent targets `MainActivity` (a
+`singleTask` activity) with the action
+`com.hexadecinull.vineos.action.LAUNCH_APP` and the instance id and package
+name as extras. `ShortcutLauncher` validates both, starts the instance when
+it is not running and queues the package. `VineVMManager` opens the app with
+the agent's `launch` command as soon as the instance reports *running* and
+retries a few times while Android is still settling.
+
+`MainActivity` is exported for the launcher, so another app can send the same
+intent. The effect is limited to starting one of the user's own instances and
+opening an app in it, with both values validated, but it is worth knowing.
+
+## Storage and snapshots
+
+`data.img` is a sparse file formatted as ext4, so choosing a large size costs
+nothing until the guest writes data. The create-instance screen accepts any
+size up to the phone's free space. Snapshots copy the image with
+`SEEK_DATA` and `SEEK_HOLE`, so holes stay holes and a mostly empty disk makes
+a small snapshot. Taking one of a running instance freezes its cgroup for the
+copy. The copy runs in a separate process so the helper stays responsive, and
+the result arrives as a `snapshot` or `restore` event. Restoring requires a
+stopped instance.
+
+## Networking
+
+With *Guest internet access* on, each guest gets its own network namespace.
+Its `eth0` is the guest end of a veth pair with an address from
+`10.77.<slot>.0/30`, configured before `init` starts by ioctls only, so the
+ROM needs no tools for it. The host end is NATed through the phone's current
+uplink with `ip` and `iptables`. Android routes per network, so traffic is
+pointed at the table of the current uplink. This part is best effort: when
+it fails the guest still boots without internet. Android's own connectivity
+service must also adopt `eth0` for apps to see a network, see
+[ROM_INTEGRATION.md](ROM_INTEGRATION.md).
 
 ## ABI compatibility
 
@@ -176,9 +348,10 @@ actually have on a given device.
 
 | Store | Technology | Contents |
 |---|---|---|
-| `VineDatabase` | Room | `VMInstance` rows: name, RAM/storage size, status, timestamps |
-| App preferences | Jetpack DataStore | Theme, default RAM/storage, root toggle, and other `AppSettings` |
-| Instance + ROM files | App-private storage (`context.filesDir`) | Downloaded `.vrom` images, per-instance rootfs data |
+| `VineDatabase` | Room | `VMInstance` rows: name, RAM and storage size, status, timestamps |
+| App preferences | Jetpack DataStore | Theme, defaults, display settings, guest network, root toggle |
+| Instance and ROM files | App-private storage (`context.filesDir`) | Downloaded `.vrom` images, [instance directories](#instance-directory-layout) |
+| App cache | `filesDir/app_cache/<id>/` | App lists and icons read from guests for the shortcut picker |
 
 Room's `fallbackToDestructiveMigration(dropAllTables = true)` is used
 instead of real migrations while the schema is still moving during the
@@ -189,25 +362,39 @@ pre-1.0 phase; this will be replaced with versioned migrations before a
 
 Summarized here; the authoritative version is
 [SECURITY.md](../project/SECURITY.md#security-design-notes). Namespace isolation is
-meaningful but not equivalent to a hypervisor boundary. The threat model
-assumes an untrusted guest but a trusted host (the attacker doesn't already
-have root on the host device) and a trusted, hash-verified ROM image. Root
-access inside a guest (Magisk) is opt-in and explicitly narrows the
-isolation boundary for that instance only.
+meaningful but not equivalent to a hypervisor boundary, and without a user
+namespace guest root is host root. The threat model assumes a trusted ROM
+image (hash-verified on download) and a trusted host. The root helper accepts
+commands only from the app that started it, over its stdin, and only touches
+paths under the instances directory. Root access inside a guest (Magisk) is
+opt-in and explicitly narrows the isolation boundary for that instance only.
 
 ## Testing strategy
 
 - **Unit tests** (`app/src/test/`): JUnit4 + MockK + Truth, covering model
-  logic (`VMStatus` conversion, `AbiCompat`'s compatibility matrix),
-  repository behavior against mocked dependencies, and `ViewModel` state
-  transitions.
+  logic (`VMStatus`, `AbiCompat`), the helper and guest protocols,
+  `DisplayPlanner`, `StorageSizing`, shortcut validation, repository behavior
+  against mocked dependencies and `ViewModel` state transitions.
 - **Instrumented tests** (`app/src/androidTest/`): Room database tests
   running against a real in-memory database on-device, plus Compose UI
   tests where relevant.
-- **Native code** currently has no automated tests; the `-Wall -Wextra
-  -Wpedantic` compiler flags and code review are its only checks, and
-  native logic that can reasonably move to Kotlin (like `AbiCompat`) is
-  kept there specifically so it's easier to unit test.
+- **Native tests** (`app/src/main/cpp/tests/native/`): the engine sources
+  build with plain `g++` on a Linux host. `run_tests.sh` boots a small fake
+  ROM (a static `init` and a fixture of ramdisk, ext4 images and tools)
+  through the real `Container` code in real namespaces and checks isolation
+  (including a private network namespace), `/data` persistence and growth,
+  pause and resume, crash and power-off handling and two guests at once. It
+  also drives the helper binary over its protocol with a fake guest agent. It
+  needs root, `mke2fs` and a kernel with loop devices. NAT is not covered
+  when the host has no `ip` tool, as in the sandbox these were written in. `run_display_tests.sh` covers the framebuffer reader, the
+  pixel conversion and the guest side writer, including a writer racing the
+  reader, and needs nothing but `g++`.
+- **Guest agent** (`rom/agent/test/`): the agent's protocol class is plain
+  Java, so `run_tests.sh` there checks it on any JDK.
+
+What none of these prove: that the app builds and runs on a device, that a
+real Android system image boots inside the container, and that NAT works on
+Android's networking stack.
 
 ## CI/CD
 
@@ -219,6 +406,8 @@ GitLab CI/CD, defined in `.gitlab-ci.yml`, with helper scripts under
 | `ktlint` | Branch and merge request pipelines | Kotlin style check |
 | `android-lint` | Branch and merge request pipelines | Android lint |
 | `unit-tests` | Branch and merge request pipelines | JUnit tests, results shown in the merge request |
+| `native-display-tests` | Branch and merge request pipelines | Framebuffer reader and guest writer tests with plain `g++` |
+| `rom-kit-tests` | Branch and merge request pipelines | Guest agent protocol tests on a JDK, syntax check of the Python tools |
 | `secret_detection` | Branch and merge request pipelines | Scans for committed credentials |
 | `build-debug` | After the checks pass | Debug APK, including the NDK compile |
 | `nightly` | Pipeline schedule | Unit tests and a debug APK |

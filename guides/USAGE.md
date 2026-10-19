@@ -11,11 +11,21 @@ source, see [BUILDING.md](BUILDING.md); for how it works internally, see
 - [Downloading a ROM](#downloading-a-rom)
 - [Creating an instance](#creating-an-instance)
 - [Running an instance](#running-an-instance)
+- [Display and navigation buttons](#display-and-navigation-buttons)
+- [Home screen shortcuts](#home-screen-shortcuts)
 - [Managing instances](#managing-instances)
+- [Snapshots](#snapshots)
 - [Settings](#settings)
 - [Root access inside a guest](#root-access-inside-a-guest)
 - [Understanding the compatibility badges](#understanding-the-compatibility-badges)
 - [Troubleshooting](#troubleshooting)
+
+> **Where things stand.** The container engine, the app and the guest
+> protocols are built and tested on a host. No real Android ROM has booted
+> inside VineOS yet, so an instance only starts a ROM that carries the guest
+> side kit described in [ROM_INTEGRATION.md](../reference/ROM_INTEGRATION.md).
+> Starting an instance also needs root today, because the engine runs in a
+> helper started with `su`.
 
 ## Before you start: is your device compatible?
 
@@ -55,11 +65,15 @@ From a ROM's detail page, once it's downloaded, tap **Create Instance**:
 3. **RAM**: how much memory the guest gets. More RAM means smoother guest
    performance but less available to the rest of your device while it's
    running.
-4. **Storage**: how much disk space the guest's writable partition gets.
-   This is allocated up front, so pick something reasonable for what
-   you'll install inside the guest.
-5. Tap **Create Instance**. VineOS sets up the instance's storage and
-   takes you straight into it.
+4. **Storage**: the size of the guest's writable partition. Use the slider
+   for the usual sizes or type any size in GB, up to the free space on your
+   phone. There is no fixed cap. The disk is a sparse file, so the size is
+   an upper limit and the instance only uses the space the guest actually
+   writes.
+5. **CPU cores** and **Enable root** (only offered when root instances are
+   allowed in Settings).
+6. Tap **Create Instance**. VineOS unpacks the ROM into the instance and
+   returns you to the home screen. Start it from there when you are ready.
 
 ## Running an instance
 
@@ -68,32 +82,99 @@ tap the card itself to see its detail page first. A running instance shows
 a live status indicator (booting, running, error) and can be stopped from
 either the home screen or its detail page.
 
-Once booted, the instance opens full-screen. Touch input is forwarded
-directly to the guest as if it were a real touchscreen; the floating
-controls at the bottom give you Android's Home and Recents/Overview
-actions inside the guest, plus a way to back out to VineOS itself.
+Once booted, the instance opens full-screen. Touch input, including
+multi-touch with up to ten fingers, is forwarded to the guest as if it were a
+real touchscreen. See [Display and navigation buttons](#display-and-navigation-buttons)
+for the on-screen controls.
 
 Instances keep running in the background (via a foreground service, with
 a persistent notification) if you switch away from VineOS, so you can use
 other apps while a guest stays booted.
+
+## Display and navigation buttons
+
+The guest screen fills the whole phone. The status bar and the system
+navigation bar are hidden while an instance is open, and swiping from the
+edge shows them for a moment.
+
+- **Screen fit** in Settings decides the shape of the guest screen. *Fill the
+  whole screen* gives the guest your phone's own aspect ratio, so there is no
+  empty space at the top or bottom. *Keep 9:16 shape* keeps a classic phone
+  shape with black bars.
+- **Guest resolution** trades sharpness for speed. High renders the long side
+  at 1920 pixels, Balanced at 1280, Low at 960. A lower setting costs less
+  CPU.
+- **Avoid camera cutout** keeps the guest below the notch or camera hole.
+- **On-screen buttons** controls the three round back, home and recents
+  buttons:
+  - *Hidden* (default): no buttons. The phone's back gesture acts as Back
+    inside the guest. Touch the screen with three fingers to show the
+    controls, which also hold Exit and Stop.
+  - *Tap to show*: a small handle at the top. Tap it and the buttons appear
+    for a few seconds.
+  - *Always visible*: the buttons stay on top of the guest screen.
+
+A changed guest resolution applies the next time an instance starts.
+
+## Home screen shortcuts
+
+Put an app from inside an instance on your home screen. Tapping the shortcut
+starts the instance right away and opens the app as soon as the guest has
+booted.
+
+1. Open **Settings → App Shortcuts**.
+2. Pick an instance. The list shows the apps installed inside it. If the
+   instance has never been listed, start it once from this screen and the
+   list is read from the running guest, then remembered, so the picker also
+   works while the instance is off.
+3. Tap an app. Android asks to add the shortcut and uses the app's name and
+   icon. If the guest could not provide the icon, the VineOS icon is used.
+4. If the instance is already running, the shortcut only opens the app.
+
+The shortcut depends on the guest agent listed in
+[ROM_INTEGRATION.md](../reference/ROM_INTEGRATION.md). A ROM without the agent
+still starts from the shortcut, but the app list and the automatic opening of
+the app are unavailable.
 
 ## Managing instances
 
 From an instance's detail page you can see its RAM/storage allocation,
 when it was created and last used, and (with **Show diagnostics**) a raw
 dump of the container's current state, mount table, and QEMU status,
-useful when filing a bug report. Deleting an instance removes its storage
-permanently and can't be undone; an instance must be stopped first.
+useful when filing a bug report. The diagnostics end with the tail of the
+instance's boot log, which is the first place to look when a ROM fails to
+start. Deleting an instance removes its storage permanently and can't be
+undone; an instance must be stopped first.
+
+## Snapshots
+
+A snapshot is a copy of an instance's `/data` disk, the apps and files you
+installed inside it. On the instance's detail page tap **Create snapshot**. It is named after
+the date and time, and later you pick **Restore** next to it to go back, or
+delete it to free the space.
+
+- Snapshots copy only the parts of the disk that hold data, so a mostly empty
+  disk makes a small snapshot. There must be enough free space for the copy.
+- Creating a snapshot of a running instance freezes it for the length of the
+  copy so the disk does not change underneath it. If the phone cannot freeze it, stop the
+  instance first.
+- A snapshot is a disk copy, not a memory snapshot. Restoring it behaves like
+  pulling the plug and booting again.
+- Restoring replaces the current disk and needs the instance to be stopped.
 
 ## Settings
 
 | Setting | What it does |
 |---|---|
-| Dynamic color | Uses Android's Material You wallpaper-based theme instead of VineOS's own brand palette |
-| Keep screen on | Prevents the display from sleeping while VineOS is open |
-| Default RAM / storage | Pre-fills the create-instance form; you can still override per instance |
+| Material You | Uses Android's Material You wallpaper-based theme instead of VineOS's own brand palette |
+| Default RAM, storage and CPU cores | Pre-fills the create-instance form; you can still override per instance. Storage accepts any size up to your free space |
+| Keep screen on | Prevents the display from sleeping while an instance is running |
+| On-screen buttons, Screen fit, Guest resolution, Avoid camera cutout | How the guest screen is shown, see [Display and navigation buttons](#display-and-navigation-buttons) |
+| App Shortcuts | Put an app of an instance on your home screen, see [Home screen shortcuts](#home-screen-shortcuts) |
+| Guest internet access | Gives instances a private network behind your phone's connection. Turn it off to keep guests offline |
 | Show technical info | Shows kernel version, ABI, and namespace details on instance cards |
-| Allow root instances | Enables the option to grant an instance root access; see below |
+| Allow rooted instances | Enables the option to grant an instance root access; see below |
+| Shizuku | Probes whether ADB-level privilege is enough for the container engine on your device |
 
 ## Root access inside a guest
 
@@ -137,6 +218,22 @@ A running instance is a full Android system doing real work, similar to
 running a resource-heavy app. QEMU-emulated instances cost more CPU than
 natively-running ones; check the compatibility badge before committing to
 a ROM if this matters to you.
+
+**The instance fails with "init is not container aware"**
+The ROM's `init` does not carry the VineOS marker, so VineOS refuses to start
+it. An unpatched Android `init` would load its SELinux policy into your
+phone's kernel. The ROM needs the patch described in
+[ROM_INTEGRATION.md](../reference/ROM_INTEGRATION.md).
+
+**It says root is required**
+The engine runs in a helper started with `su`. Grant the superuser prompt, or
+check that your root manager lists VineOS. A no-root path is still on the
+roadmap.
+
+**The guest has no internet**
+Check **Guest internet access** in Settings. Networking needs the `ip` and
+`iptables` tools on the phone and is best effort: when it cannot be set up the
+guest still boots, just offline.
 
 **I can't find a "Create Instance" option**
 It only appears on a downloaded ROM's detail page (ROMs tab → tap a ROM →

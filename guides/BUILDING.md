@@ -7,6 +7,7 @@ This covers building VineOS from source: the Android app (Kotlin + NDK), the
 
 - [Prerequisites](#prerequisites)
 - [Building the Android app](#building-the-android-app)
+- [Running the tests](#running-the-tests)
 - [Building qemu-arm](#building-qemu-arm)
 - [Building AOSP ROM images](#building-aosp-rom-images)
 - [CI/CD](#cicd)
@@ -85,6 +86,27 @@ create a `keystore.properties` in the project root (covered by
 `.gitignore`) with `storeFile`/`storePassword`/`keyAlias`/`keyPassword`,
 and `app/build.gradle.kts` picks it up automatically. Without it,
 `assembleRelease` still works locally, just producing an unsigned APK.
+
+The native build produces two things per host ABI: `libvine_runtime.so`
+(JNI, loaded by the app) and `libvine_helper.so`, which is really an
+executable that the app starts as root with `su`. It is named like a library
+so Android extracts it into the native library directory, which is why
+`app/build.gradle.kts` sets `useLegacyPackaging = true` and links the C++
+runtime statically. See
+[ARCHITECTURE.md](../reference/ARCHITECTURE.md#native-pieces-c).
+
+## Running the tests
+
+| What | Command | Needs |
+|---|---|---|
+| Kotlin unit tests | `./gradlew :app:testDebugUnitTest` | The Android SDK, as for the app |
+| Engine and helper on a Linux host | `sudo sh app/src/main/cpp/tests/native/run_tests.sh` | root, `g++`, `python3`, `mke2fs`, zlib, a kernel with loop devices. Run it on a Linux machine or in WSL2, not on a phone |
+| Framebuffer reader and guest writer | `sh app/src/main/cpp/tests/native/run_display_tests.sh` | `g++` |
+| Guest agent protocol | `sh rom/agent/test/run_tests.sh` | a JDK |
+
+The host engine test boots a small fake ROM through the real container code.
+It does not boot Android, and it skips the NAT checks when the host has no
+`ip` tool.
 
 ## Building qemu-arm
 
@@ -243,11 +265,17 @@ cd ~/aosp-7
 source build/envsetup.sh
 lunch aosp_arm64-userdebug   # dual-ABI: arm64-v8a + armeabi-v7a in the guest
 
-git apply ../VineOS/rom-patches/android-7/*.patch
-
 make -j$(nproc) 2>&1 | tee build.log
 # Produces system.img, ramdisk.img, kernel, etc. in out/target/product/generic_arm64/
 ```
+
+A stock AOSP build will not run in VineOS as it is. Before packaging, the
+ROM needs the guest side kit from the `rom/` folder of the main repository:
+a container aware `init`, the guest agent, a display writer for the `vinefb`
+framebuffer and a few init scripts. `rom/INIT_PATCH.md` describes the `init`
+changes and `rom/README.md` the rest. There are no ready-made AOSP patch
+files yet, and no ROM has booted this way so far. See
+[ROM_INTEGRATION.md](../reference/ROM_INTEGRATION.md).
 
 ### ROM image format (.vrom)
 
@@ -256,11 +284,16 @@ A `.vrom` file is a zip archive:
 ```text
 vine-rom-7.vrom
 ├── manifest.json    ROM metadata: version, sha256s, API level, etc.
-├── system.img       ext4 image, the Android /system partition
-├── vendor.img       ext4 image, /vendor partition (minimal)
-├── ramdisk.img      Android ramdisk, contains /init
-└── kernel           Prebuilt Linux kernel for ranchu
+├── system.img       ext4 (or Android sparse) image, the Android /system partition
+├── vendor.img       optional ext4 image, /vendor partition
+└── ramdisk.img      Android ramdisk, contains /init
 ```
+
+VineOS unpacks `ramdisk.img`, `vendor.img` and `system.img` and ignores
+anything else in the archive. A `kernel` entry is skipped on purpose: guests
+run on the phone's kernel, so a ROM kernel would never be used. When the
+manifest lists a `sha256` for a file, the app checks it while unpacking and
+refuses a damaged file.
 
 `manifest.json`:
 
@@ -279,19 +312,22 @@ vine-rom-7.vrom
 }
 ```
 
-Package it:
+`displayName`, `androidVersion`, `apiLevel` and `supportedAbis` are required
+by the store manifest generator (`scripts/generate_manifest.py`). A ROM whose
+only ABIs are 32-bit ARM is run through QEMU on hosts without AArch32
+support.
+
+Package it with the script from the main repository, which writes the
+manifest and the per-file hashes for you:
 
 ```bash
-cd out/target/product/generic_arm64/
-zip -0 vine-rom-7.vrom system.img vendor.img ramdisk.img kernel
-python3 -c "
-import json, hashlib
-files = ['system.img', 'vendor.img', 'ramdisk.img', 'kernel']
-sha256s = {f: hashlib.sha256(open(f, 'rb').read()).hexdigest() for f in files}
-print(json.dumps({'sha256': sha256s}, indent=2))
-" > manifest.json
-zip vine-rom-7.vrom manifest.json
+python3 rom/package_vrom.py out/target/product/generic_arm64/ vine-rom-7.vrom \
+    --name "Android 7.1.2 Nougat" --android-version 7.1.2 --api-level 25 \
+    --abis arm64-v8a armeabi-v7a
 ```
+
+The folder given first must hold `ramdisk.img` and `system.img`, and may hold
+`vendor.img`.
 
 ## CI/CD
 
@@ -303,6 +339,8 @@ main repository, with helper scripts under `scripts/ci/`.
 | `ktlint` | test | Branch and merge request pipelines | Kotlin style check (`:app:ktlintCheck`) |
 | `android-lint` | test | Branch and merge request pipelines | Android lint (`:app:lintDebug`) |
 | `unit-tests` | test | Branch and merge request pipelines | `:app:testDebugUnitTest`, results shown in the merge request |
+| `native-display-tests` | test | Branch and merge request pipelines | Framebuffer reader and guest writer tests with plain `g++` |
+| `rom-kit-tests` | test | Branch and merge request pipelines | Guest agent protocol tests on a JDK, syntax check of the Python tools |
 | `secret_detection` | test | Branch and merge request pipelines | GitLab's secret detection scan |
 | `build-debug` | build | After the three checks above pass | Debug APK build, including the NDK compile |
 | `nightly` | build | Pipeline schedule with `SCHEDULE_TYPE=nightly` | Unit tests, then a debug APK kept for 7 days |
@@ -330,13 +368,26 @@ repositories. Skip it if you use the Mend-hosted Renovate app instead.
 
 ## Troubleshooting
 
+**The root helper does not start**
+The helper is started with `su`. Check that the superuser prompt was granted
+and that your root manager lists VineOS. The Show diagnostics panel of an
+instance reports the helper's state.
+
 **`unshare() failed: Operation not permitted`**
 The host kernel or SELinux policy is blocking namespace creation. Check
-`adb shell dmesg | grep denied` for SELinux denials.
+`adb shell dmesg | grep denied` for SELinux denials, and the device report
+in Show diagnostics for which namespaces the kernel offers.
 
-**`pivot_root failed`, falling back to `chroot`**
-Some kernel configurations disable `pivot_root` for non-root users. The
-`chroot` fallback still works but provides weaker isolation.
+**`pivot_root` fails and the engine moves the root instead**
+When the phone's own root is an initramfs, `pivot_root` cannot work, so the
+engine mounts the guest root over it and uses `chroot`. This is expected on
+such devices.
+
+**`this ROM's init is not container aware`**
+The ROM's `init` lacks the `VINE_CONTAINER_INIT_V1` marker. See
+`rom/INIT_PATCH.md`. The helper's `start` command has an
+`allow_unpatched=1` option that skips the check for engine experiments. The app
+never sets it, and using it on a real phone is unsafe.
 
 **QEMU binary not found at `nativeLibraryDir/libqemu_arm.so`**
 The matching `jniLibs/<abi>/libqemu_arm.so` is missing for the device's host

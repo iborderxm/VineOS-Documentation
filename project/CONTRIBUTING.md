@@ -85,20 +85,26 @@ VineOS/
 │       │   │   │   ├── models/          VMInstance, ROMImage, AbiCompat, ...
 │       │   │   │   └── repository/      InstanceRepository, ROMRepository, VineDatabase
 │       │   │   ├── domain/
-│       │   │   │   └── VineVMManager.kt VM lifecycle orchestrator
+│       │   │   │   ├── VineVMManager.kt VM lifecycle orchestrator
+│       │   │   │   ├── InstanceProvisioner.kt, DisplayPlanner.kt, StorageSizing.kt
+│       │   │   │   └── shortcuts/       Home screen app shortcuts
+│       │   │   ├── helper/              Root helper client and the helper and guest protocols
 │       │   │   ├── service/
 │       │   │   │   └── VineService.kt   Foreground service
 │       │   │   └── native/
 │       │   │       └── VineRuntime.kt   JNI bridge
-│       │   └── cpp/                     C++17 native runtime
+│       │   └── cpp/                     C++17 native code
 │       │       ├── CMakeLists.txt
 │       │       ├── vine_runtime.cpp     JNI entry points
-│       │       ├── container/           Linux namespace container
+│       │       ├── container/           Linux namespace container engine
+│       │       ├── helper/              Root helper server and guest agent link
 │       │       ├── qemu_bridge/         QEMU binary verification + binfmt_misc
-│       │       ├── display/             Guest framebuffer to Surface bridge
-│       │       ├── input/               Host touch/key events to guest uinput
-│       │       └── utils/               Logging, filesystem, process helpers
+│       │       ├── display/             vinefb contract, reader and Surface bridge
+│       │       ├── diagnostics/         What the kernel offers the engine
+│       │       ├── utils/               Logging, filesystem, process helpers
+│       │       └── tests/native/        Host tests with a fake ROM
 │       └── test/, androidTest/          Unit and instrumented tests
+├── rom/                              Guest side ROM kit: agent, init scripts, vinefb writer, .vrom packer
 ├── scripts/                          CI helpers and the ROM manifest generator
 ├── .gitlab/                          Issue and merge request templates
 ├── .gitlab-ci.yml                    CI/CD pipeline
@@ -233,7 +239,9 @@ mark breaking changes with `BREAKING CHANGE:` in the footer.
    ./gradlew test
    ```
 
-4. Add or update tests if your change touches logic
+4. Add or update tests if your change touches logic. Changes to the native
+   engine also need `sudo sh app/src/main/cpp/tests/native/run_tests.sh` on a
+   Linux machine, see [BUILDING.md](../guides/BUILDING.md#running-the-tests)
 5. Update the [documentation](https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation) (and inline comments, sparingly) if needed
 6. Open the merge request against `dev`, fill in the merge request template, and link related issues
 

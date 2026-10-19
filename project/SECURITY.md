@@ -45,6 +45,8 @@ In scope:
 - Container namespace escape (guest process reaching the host filesystem or processes)
 - QEMU binfmt_misc misconfiguration enabling arbitrary code execution on the host
 - VineRuntime JNI vulnerabilities allowing privilege escalation
+- The root helper: any way for another app or a guest to make it run commands or touch files outside the instances directory
+- The guest agent link (`agent.sock`) and the home screen shortcut intent handling
 - ROM download integrity bypass (SHA-256 verification)
 - VineService foreground service abuse
 
@@ -66,15 +68,42 @@ review of security-sensitive changes.
 
 ## Security Design Notes
 
-VineOS uses Linux namespaces (PID, mount, UTS, IPC) for guest isolation.
-This provides meaningful but not absolute isolation; it is not a
-hypervisor. The security model assumes:
+VineOS uses Linux namespaces (PID, mount, UTS, IPC and network) and cgroups
+for guest isolation. This provides meaningful but not absolute isolation; it
+is not a hypervisor. The security model assumes:
 
-1. The host device is not rooted by an attacker (the attacker has normal
-   Android app sandbox privileges)
-2. The guest ROM image is trusted (downloaded and SHA-256 verified by VineOS)
-3. SELinux is enforcing on the host
+1. The guest ROM image is trusted (downloaded and SHA-256 verified by VineOS)
+2. The host is not already compromised, and the user trusts the apps they
+   grant root to
+3. Only the VineOS app can talk to the root helper it started
+
+Things worth knowing before running a guest:
+
+- **There is no user namespace.** Root inside a guest is root on the phone,
+  limited only by the guest's own mounts, namespaces and cgroup limits. A
+  malicious ROM must be assumed able to escape. Only run ROMs you trust.
+- **The root helper** (`libvine_helper.so`) is started by the app with `su`
+  and talks to it only over the standard input and output of that process, so
+  no other process can send it commands. It accepts file paths only below the
+  instances directory it was started with, validates instance ids, package
+  names and snapshot names, and exits, killing every guest, when the app goes
+  away. A compromise of the app process is therefore a compromise of whatever
+  the helper can do as root.
+- **Unpatched `init` is refused.** An unmodified Android `init` loads its
+  SELinux policy into the kernel it runs on, which here is the phone's. The
+  engine refuses to start a ROM whose `init` does not carry the
+  `VINE_CONTAINER_INIT_V1` marker. The marker is a promise by the ROM author,
+  not a verification of the patch.
+- **Home screen shortcuts** launch `MainActivity` with a custom action. The
+  activity is exported so launchers can use it, which means any app can send
+  that intent. It can only start one of the user's own instances and open an
+  app in it, and the instance id and package name are validated, but the
+  exposure exists.
+- **The guest agent socket** lives in the instance's shared folder, which the
+  guest can write to. The helper treats everything it reads from the agent as
+  untrusted data and limits the size of replies.
 
 Root-required features (Magisk inside instances) are opt-in and explicitly
 documented as reducing the isolation boundary. See
-[ARCHITECTURE.md](../reference/ARCHITECTURE.md#security-model) for the full threat model.
+[ARCHITECTURE.md](../reference/ARCHITECTURE.md#security-model) for the full
+threat model.
