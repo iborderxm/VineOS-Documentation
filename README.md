@@ -92,3 +92,20 @@ Questions, ideas, or just want to hang out? Join the
 
 Like the rest of VineOS, this documentation is licensed under the GNU General
 Public License v3.0. See [LICENSE](LICENSE).
+
+## Project policies
+
+- **[USER_AGREEMENT.md](project/USER_AGREEMENT.md)**: the agreement shown in the
+  app at first run and under Settings.
+- **[PRIVACY.md](project/PRIVACY.md)**: what VineOS stores and which network
+  requests it makes.
+- **[TERMS.md](project/TERMS.md)**: terms of service.
+- **[SECURITY.md](project/SECURITY.md)** and
+  **[CODE_OF_CONDUCT.md](project/CODE_OF_CONDUCT.md)**.
+
+## Guides added in 0.1.1
+
+- **[Troubleshooting](guides/TROUBLESHOOTING.md)**: logs, privilege levels, Shizuku and
+  Wireless debugging, Android 7 boot checklist.
+- **[Device identity](guides/DEVICE_IDENTITY.md)**: spoofing the model, serial and build
+  fingerprint of an instance.

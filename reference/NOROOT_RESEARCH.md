@@ -161,3 +161,20 @@ ever becomes possible to observe them (e.g. via `strace`/`dmesg` on a
 rooted test device running the closed-source app itself, which would
 show directly what syscalls it relies on rather than guessing from
 policy alone).
+
+## Update for 0.1.1
+
+The recommended next step above is now built into the app:
+
+- **Settings, Engine and privileges, Test namespace access** runs the probe
+  through a Shizuku user service and explains the result.
+- The helper runs through Shizuku as the shell user (`--allow-unprivileged`),
+  and fails before any preparation with the exact errno when the kernel refuses
+  namespaces. A Shizuku that was started with root works as a full root path.
+- A log from a real phone showed the first failure was not the kernel at all.
+  The app crashed 270 ms after Start because a foreground service was stopped
+  while Android still waited for `startForeground`. That race is fixed, see
+  [Troubleshooting](../guides/TROUBLESHOOTING.md).
+
+What is still open: a phone whose ADB shell can create namespaces. Please run
+the probe on yours and report the result.

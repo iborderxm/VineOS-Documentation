@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Last updated: July 2026**
+**Last updated: October 2026**
 
 VineOS is a free, open-source Android app. This policy explains what data
 it handles and, just as importantly, what it doesn't.
@@ -18,11 +18,18 @@ your device. The source code backing every claim below is public; see
 | Data | Where | Purpose |
 |---|---|---|
 | VM instance metadata (name, RAM/storage size, status) | Local Room database (`VineDatabase`) | Lets the app list and manage your instances |
-| App settings (theme, default RAM, root toggle, etc.) | Jetpack DataStore preferences | Remembers your configuration between launches |
+| App settings (theme, language, default RAM, privilege mode, keep-alive, etc.) | Jetpack DataStore preferences | Remembers your configuration between launches |
+| Per-instance settings, including the device identity values you enter for spoofing (brand, model, serial, Android ID, fingerprint) | Local Room database | Applies your choices inside that instance only |
+| The in-app log (a memory buffer of recent events) and, only if you turn it on, a log file | App memory, and the app cache folder when file logging is on | Lets you and contributors diagnose problems |
 | Downloaded ROM images and per-instance rootfs data | App-private storage (`context.filesDir`) | Runs the guest Android systems you create |
 
 None of this leaves your device unless you explicitly export or share it
-yourself (for example, attaching logs to a bug report).
+yourself (for example, saving logs or a diagnostic report and attaching it to
+a bug report). A diagnostic report contains technical details about your
+device and can include its build fingerprint, so read it before sharing.
+Device identity values you configure are written into the guest instance
+only. Apps inside that instance may send them to their own servers, which is
+outside VineOS and this policy.
 
 ## Network requests VineOS makes
 
@@ -45,11 +52,20 @@ any advertising or analytics network calls.
 | Foreground service | Keeping a running VM instance alive while you use other apps |
 | Post notifications | Showing the required foreground service notification, and download progress |
 | Storage / media (scoped by Android version) | Reading ROM files you import manually, and future host-to-guest file sharing |
-| Wake lock | Preventing the device from sleeping mid-boot or mid-download |
+| Wake lock and Wi-Fi lock | Preventing the device from sleeping mid-boot or mid-download, and, only when you turn on Background keep-alive, while an instance runs |
+| Ignore battery optimizations | Optional. Stops Android from freezing a running instance. VineOS only opens the system screen where you decide |
+| All files access | Optional. Lets VineOS read ROM files and write exported logs on shared storage. Imports also work without it through the system file picker |
 | Vibrate | Haptic feedback on touch input inside a running instance |
 
 VineOS requests each permission only where the corresponding feature is
 used, and none of them are used to collect data about you.
+
+## Privileged access and the Terminal
+
+VineOS uses root or Shizuku only to run its engine and the commands you type
+into the Terminal. The Terminal does not run anything on its own. Command
+output stays in the app and is discarded when you leave the screen unless you
+copy, save or share it.
 
 ## Guest operating systems
 

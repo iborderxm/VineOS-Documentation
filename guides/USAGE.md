@@ -10,6 +10,7 @@ source, see [BUILDING.md](BUILDING.md); for how it works internally, see
 - [Before you start: is your device compatible?](#before-you-start-is-your-device-compatible)
 - [Downloading a ROM](#downloading-a-rom)
 - [Creating an instance](#creating-an-instance)
+- [First run](#first-run)
 - [Running an instance](#running-an-instance)
 - [Display and navigation buttons](#display-and-navigation-buttons)
 - [Home screen shortcuts](#home-screen-shortcuts)
@@ -24,8 +25,10 @@ source, see [BUILDING.md](BUILDING.md); for how it works internally, see
 > protocols are built and tested on a host. No real Android ROM has booted
 > inside VineOS yet, so an instance only starts a ROM that carries the guest
 > side kit described in [ROM_INTEGRATION.md](../reference/ROM_INTEGRATION.md).
-> Starting an instance also needs root today, because the engine runs in a
-> helper started with `su`.
+> Starting an instance needs root, or Shizuku started with root. Shizuku
+> started through Wireless debugging runs as the ADB shell user, which most
+> phones do not allow to create the namespaces the engine needs; the
+> [Troubleshooting](TROUBLESHOOTING.md) guide explains how to check yours.
 
 ## Before you start: is your device compatible?
 
@@ -57,23 +60,35 @@ carrier bloatware inside a guest. That's intentional.
 
 ## Creating an instance
 
-From a ROM's detail page, once it's downloaded, tap **Create Instance**:
+Tap **New instance** on the Instances tab. Everything happens on one screen:
 
-1. **Name** your instance (defaults to the ROM's display name).
-2. **Pick an icon** from the emoji choices, just a visual way to tell
-   instances apart on the home screen.
-3. **RAM**: how much memory the guest gets. More RAM means smoother guest
-   performance but less available to the rest of your device while it's
-   running.
-4. **Storage**: the size of the guest's writable partition. Use the slider
-   for the usual sizes or type any size in GB, up to the free space on your
-   phone. There is no fixed cap. The disk is a sparse file, so the size is
-   an upper limit and the instance only uses the space the guest actually
-   writes.
-5. **CPU cores** and **Enable root** (only offered when root instances are
-   allowed in Settings).
-6. Tap **Create Instance**. VineOS unpacks the ROM into the instance and
-   returns you to the home screen. Start it from there when you are ready.
+1. **ROM**: swipe through your downloaded ROMs and pick one. If you have none
+   yet, the screen offers a button that takes you to the ROMs tab.
+2. **Name**: filled in from the ROM, and made unique if you already have an
+   instance with that name.
+3. **Performance**: *Light* (1 GB, 2 cores), *Balanced* (your defaults) or
+   *Fast* (half of your phone's RAM and a higher CPU priority).
+4. **Advanced options** (collapsed by default): icon, memory, storage (any size
+   up to your free space; the disk is a sparse file, so it only uses what the
+   guest writes), CPU cores, graphics backend, device identity (see
+   [Device identity](DEVICE_IDENTITY.md)) and, when allowed in Settings, root.
+5. Tap **Create instance**. VineOS unpacks the ROM and returns you to the home
+   screen. Start it from there when you are ready.
+
+You can still open a ROM's detail page and create an instance from there. It
+opens the same screen with that ROM already selected.
+
+Everything you chose, and more, can be changed later under **Instance
+settings** (the slider icon on the instance page, or the card's menu).
+
+## First run
+
+The first launch shows a short setup: language, theme (with a live preview),
+permission checks (notifications, storage access, battery optimization),
+privileged access (root or Shizuku) and the
+[User Agreement](../project/USER_AGREEMENT.md) with the
+[Privacy Policy](../project/PRIVACY.md). Nothing except accepting the agreement
+is required, and every step can be repeated later under Settings.
 
 ## Running an instance
 
@@ -164,17 +179,19 @@ delete it to free the space.
 
 ## Settings
 
-| Setting | What it does |
+| Page | What it covers |
 |---|---|
-| Material You | Uses Android's Material You wallpaper-based theme instead of VineOS's own brand palette |
-| Default RAM, storage and CPU cores | Pre-fills the create-instance form; you can still override per instance. Storage accepts any size up to your free space |
-| Keep screen on | Prevents the display from sleeping while an instance is running |
-| On-screen buttons, Screen fit, Guest resolution, Avoid camera cutout | How the guest screen is shown, see [Display and navigation buttons](#display-and-navigation-buttons) |
-| App Shortcuts | Put an app of an instance on your home screen, see [Home screen shortcuts](#home-screen-shortcuts) |
-| Guest internet access | Gives instances a private network behind your phone's connection. Turn it off to keep guests offline |
-| Show technical info | Shows kernel version, ABI, and namespace details on instance cards |
-| Allow rooted instances | Enables the option to grant an instance root access; see below |
-| Shizuku | Probes whether ADB-level privilege is enough for the container engine on your device |
+| Appearance | A dark mode switch. Tapping the row (not the switch) opens the dark mode options: follow system, light, dark and AMOLED pure black. Also Material You colors, seven accent colors, animation level (full, reduced, off), haptics and keep screen on |
+| Language | English, French, Spanish, Chinese, Russian and German. The app follows your phone's language and falls back to English |
+| Virtual machine defaults | Memory, storage, CPU cores, graphics backend (automatic, OpenGL ES, Vulkan, software), frame rate limit, performance profile, guest internet, ashmem compatibility, rooted instances, technical info |
+| Display | Screen fit, guest resolution, on-screen buttons, camera cutout, see [Display and navigation buttons](#display-and-navigation-buttons) |
+| Engine and privileges | How VineOS gets access (automatic, root, Shizuku), Shizuku status and extra package names for forks, the namespace test, Wireless debugging steps, background keep-alive, battery optimization, idle shutdown, device report |
+| App shortcuts | Put an app of an instance on your home screen, see [Home screen shortcuts](#home-screen-shortcuts) |
+| Terminal | Run commands in the app, on the host phone or in a running guest |
+| Logs | Every action and message, filterable, savable and shareable, plus a diagnostic report |
+| Legal and About | User Agreement, Privacy Policy, licenses, version, developer and contributors. **More** holds the detailed build, engine and device information |
+
+Debug builds add a **Debug settings** page.
 
 ## Root access inside a guest
 
@@ -203,6 +220,9 @@ host/guest compatibility matrix if you're curious why a specific
 combination lands where it does.
 
 ## Troubleshooting
+
+The full guide, with the log viewer, diagnostic report and an Android 7 boot
+checklist, is in [TROUBLESHOOTING.md](TROUBLESHOOTING.md). Quick answers:
 
 **An instance won't boot / gets stuck on "Booting"**
 Check its diagnostics panel for mount or namespace errors. If the ROM

@@ -230,3 +230,18 @@ benefits from:
 - SELinux of the phone is the policy the guest runs in.
 - Android networking needs framework support for `eth0` as described above.
 - Display output depends on a graphics path nobody has written for a stock ROM yet.
+
+## Properties added in 0.1.1
+
+| Property | Meaning |
+| --- | --- |
+| `ro.boot.vine.gpu` | `auto`, `gles`, `vulkan` or `software`. `/system/etc/vine/gpu.sh` turns it into `debug.hwui.renderer` (Skia GL or Skia Vulkan on Android 10 and newer) |
+| `ro.boot.vine.perf` | `battery`, `balanced` or `performance` |
+| `ro.boot.vine.fps_cap` | Frame rate limit, `0` for none |
+| `ro.boot.vine.ashmem` | `device`, `memfd` (shim preloaded) or `missing` |
+| `ro.boot.vine.root` | `1` only when the instance was created with root and the app allows it |
+| `ro.product.*`, `ro.build.*`, `ro.serialno` | Present only when the instance has a device identity |
+
+Add `service vine-gpu` and `gpu.sh` from the kit to your image. A ROM that is
+Android 7 or 8 and uses `init.vine.rc` also gets the ashmem preload described
+in the [ROM kit README](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/blob/main/rom/README.md).

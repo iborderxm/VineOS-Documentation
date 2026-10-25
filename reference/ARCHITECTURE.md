@@ -419,3 +419,69 @@ grouped by Compose, other AndroidX, and Kotlin/KSP, and the pinned CI
 images are tracked too. Those merge requests go through the same pipeline
 as any other. [BUILDING.md](../guides/BUILDING.md#cicd) covers the pipeline schedules
 and [RELEASE_SETUP.md](../guides/RELEASE_SETUP.md) covers releases.
+
+## Privilege modes (0.1.1)
+
+The helper can now start two ways, chosen by **Settings, Engine and
+privileges**:
+
+- `su`: `su -c exec libvine_helper.so ...`, as before.
+- Shizuku: the app binds a Shizuku user service (its own process, started as
+  the Shizuku user, which is root or the ADB shell user). The service launches
+  `libvine_helper.so --allow-unprivileged` with `ProcessBuilder` and hands the
+  helper's stdin, stdout and stderr back over Binder as pipe file descriptors.
+  On the app side they are wrapped in a `java.lang.Process`, so the helper
+  client and the protocol did not change.
+
+The helper reports `uid=` and `privileged=` in its `hello` reply. As a non
+root user it checks, before any expensive preparation, that it can create
+namespaces and make mounts private, and otherwise fails with the errno. The
+namespace probe and the terminal use separate Shizuku processes, so running
+either can never stop a running helper.
+
+In `Automatic` mode the app prefers a root-backed Shizuku, then `su`, then a
+shell-level Shizuku.
+
+## Foreground service lifecycle
+
+`VineService` calls `startForeground` in `onCreate` and again in
+`onStartCommand`, so any start request satisfies Android's contract. It
+publishes a confirmed-foreground flag. `VineVMManager` reconciles the service
+under a mutex and waits for that flag before it stops the service, which
+removes the start then stop race that crashed 0.1.0. Notifications use
+`START_NOT_STICKY`, because a restarted service without guests is useless.
+
+## Device identity overlay
+
+See [Device identity](../guides/DEVICE_IDENTITY.md). The start command carries
+`spoof.<key>=<value>` pairs; `container/spoof.cpp` validates them, expands
+them to property names and rewrites `build.prop` copies that are bind mounted
+into the guest.
+
+## ashmem shim
+
+`app/src/main/cpp/shim/ashmem_shim.c` implements libcutils' `ashmem_*`
+functions on `memfd_create`. When the host has no `/dev/ashmem`, the engine
+copies `libvine_ashmem.so` into the instance's shared folder and appends
+`export LD_PRELOAD /vine/shim/libvine_ashmem.so` under `on early-init` in the
+ramdisk's `init.vine.rc`. The Bionic linker aborts a process whose preload
+cannot be loaded, so the shim is limited to the phone's primary ABI.
+
+## QEMU binfmt rule
+
+The 32 bit ARM rule uses the same magic and mask as QEMU's
+`scripts/qemu-binfmt-conf.sh`. Flags are tried as `OCFP`, then `OCF`, then `F`:
+`O` and `C` make the kernel take credentials (setuid) from the guest binary
+instead of from QEMU, `P` keeps the guest's `argv[0]` (QEMU's linux-user honors
+`AT_FLAGS_PRESERVE_ARGV0`), and `F` opens QEMU at registration so it works
+inside the guest's mount namespace. `P` needs Linux 4.8, so older kernels fall
+back. The engine also reads only the ELF header of the QEMU binary (the old
+check loaded the whole file), accepts 32 bit builds on 32 bit hosts, rejects a
+dynamically linked build, and reports its version.
+
+## Memory and CPU limits
+
+The cgroup memory limit is the instance's RAM plus one eighth of headroom for
+kernel structures that are charged to the group, with `memory.high` (cgroup v2)
+at the nominal RAM so reclaim starts before any kill. CPU weight follows the
+performance profile (battery, balanced, performance).
