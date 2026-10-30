@@ -103,7 +103,7 @@ Public License v3.0. See [LICENSE](LICENSE).
 - **[SECURITY.md](project/SECURITY.md)** and
   **[CODE_OF_CONDUCT.md](project/CODE_OF_CONDUCT.md)**.
 
-## Guides added in 0.1.1
+## Guides added in 0.2.0
 
 - **[Troubleshooting](guides/TROUBLESHOOTING.md)**: logs, privilege levels, Shizuku and
   Wireless debugging, Android 7 boot checklist.

@@ -162,7 +162,7 @@ rooted test device running the closed-source app itself, which would
 show directly what syscalls it relies on rather than guessing from
 policy alone).
 
-## Update for 0.1.1
+## Update for 0.2.0
 
 The recommended next step above is now built into the app:
 

@@ -1,6 +1,6 @@
 # User Agreement
 
-**Version 1.0, effective October 2026. Applies to VineOS 0.1.1-alpha and later.**
+**Version 1.0, effective October 2026. Applies to VineOS 0.2.0 and later.**
 
 This agreement is between you and the VineOS project (the maintainers and
 contributors of VineOS, together "we"). It covers the VineOS Android app, its

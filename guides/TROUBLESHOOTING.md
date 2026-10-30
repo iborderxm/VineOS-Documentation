@@ -1,7 +1,7 @@
 # Troubleshooting
 
 How to find out why an instance does not start, using the tools built into
-VineOS 0.1.1-alpha.
+VineOS 0.2.0.
 
 ## Table of Contents
 
@@ -41,7 +41,7 @@ The log of such a crash ends with
 The cause was a race. The app asked Android to start its foreground service,
 the start failed immediately, and the app stopped the service again before the
 service had called `startForeground`. Android treats that as a crash. From
-0.1.1 the service enters the foreground in `onCreate`, and the app waits for
+0.2.0 the service enters the foreground in `onCreate`, and the app waits for
 that confirmation before it ever stops the service. A failed start now shows
 the real reason on the instance screen.
 

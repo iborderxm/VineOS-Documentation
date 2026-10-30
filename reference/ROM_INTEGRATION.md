@@ -231,7 +231,7 @@ benefits from:
 - Android networking needs framework support for `eth0` as described above.
 - Display output depends on a graphics path nobody has written for a stock ROM yet.
 
-## Properties added in 0.1.1
+## Properties added in 0.2.0
 
 | Property | Meaning |
 | --- | --- |

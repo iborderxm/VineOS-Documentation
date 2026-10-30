@@ -450,7 +450,7 @@ images are tracked too. Those merge requests go through the same pipeline
 as any other. [BUILDING.md](../guides/BUILDING.md#cicd) covers the pipeline schedules
 and [RELEASE_SETUP.md](../guides/RELEASE_SETUP.md) covers releases.
 
-## Privilege modes (0.1.1)
+## Privilege modes (0.2.0)
 
 The helper can now start two ways, chosen by **Settings, Engine and
 privileges**:
