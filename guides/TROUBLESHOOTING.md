@@ -10,6 +10,7 @@ VineOS 0.1.1-alpha.
 - [Which privilege level do I have](#which-privilege-level-do-i-have)
 - [Shizuku and Wireless debugging](#shizuku-and-wireless-debugging)
 - [An Android 7 or 8 ROM does not boot](#an-android-7-or-8-rom-does-not-boot)
+- [The screen is black or stutters with Vulkan](#the-screen-is-black-or-stutters-with-vulkan)
 - [Keeping instances alive in the background](#keeping-instances-alive-in-the-background)
 - [Reporting a bug](#reporting-a-bug)
 
@@ -104,6 +105,21 @@ Check these in order. The log and the device report show most of them.
 5. **QEMU.** If the ROM is 32 bit only and your CPU cannot run 32 bit code,
    the engine needs `libqemu_arm.so`, a static build. The report shows its
    version and whether the kernel supports the binfmt flags the engine uses.
+
+## The screen is black or stutters with Vulkan
+
+Vulkan output is experimental. Open the **Logs** screen and look for the line
+that starts with `Display:`. It says which presenter is in use, and when Vulkan
+was skipped it also says why (no Vulkan loader, no GPU that can present to the
+window, a format the GPU cannot blit to).
+
+- `using opengles instead of vulkan`: Vulkan could not start and the fallback
+  works. Nothing to fix, you can set the backend to Automatic to stop trying.
+- A black screen with `using vulkan`: the GPU driver accepted the swapchain but
+  shows nothing. Set the instance graphics backend to **Automatic** or
+  **OpenGL ES**, and report the GPU name from the `Graphics:` line in the log.
+- The log says the presenter keeps failing and switched: the fallback already
+  happened, the picture continues with the next presenter.
 
 ## Keeping instances alive in the background
 

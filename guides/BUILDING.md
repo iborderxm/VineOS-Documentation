@@ -101,7 +101,7 @@ runtime statically. See
 |---|---|---|
 | Kotlin unit tests | `./gradlew :app:testDebugUnitTest` | The Android SDK, as for the app |
 | Engine and helper on a Linux host | `sudo sh app/src/main/cpp/tests/native/run_tests.sh` | root, `g++`, `python3`, `mke2fs`, zlib, a kernel with loop devices. Run it on a Linux machine or in WSL2, not on a phone |
-| Framebuffer reader and guest writer | `sh app/src/main/cpp/tests/native/run_display_tests.sh` | `g++` |
+| Framebuffer reader, guest writer, presenter policy and display bridge | `sh app/src/main/cpp/tests/native/run_display_tests.sh` | `g++` |
 | Guest agent protocol | `sh rom/agent/test/run_tests.sh` | a JDK |
 
 The host engine test boots a small fake ROM through the real container code.

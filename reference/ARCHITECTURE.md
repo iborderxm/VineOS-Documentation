@@ -245,9 +245,36 @@ When `VMDisplayScreen` attaches its `Surface`, `DisplayBridge` maps the file
 read-only and starts a render thread. While frames arrive it follows the
 display's vsync through `AChoreographer`. When the guest screen is still it
 drops to a slow check, so an idle screen costs almost no CPU. Pixels are
-converted to `RGBA_8888` as needed (including `RGB565`) and the `Surface` is
-given the guest's own resolution, so the system compositor does the scaling
-and no pixel is resized in app code.
+converted to `RGBA_8888` as needed (including `RGB565`).
+
+The bridge does not draw by itself. It asks a `Presenter` to copy the newest
+frame to the window, and there are three of them:
+
+| Presenter | How a frame reaches the screen | When it is used |
+|---|---|---|
+| Software | The frame is converted straight into the buffer of `ANativeWindow_lock`. The `Surface` is given the guest's own resolution, so the system compositor does the scaling | Graphics backend "Software", and the last fallback |
+| OpenGL ES | The frame is converted into a CPU buffer, uploaded to one texture and drawn as a full screen quad through EGL | "Automatic" and "OpenGL ES" |
+| Vulkan (experimental) | The frame is converted into a mapped staging buffer, copied to a device local image and blitted (scaled) to the swapchain image. There are no shaders | "Vulkan", only offered on phones where the probe found a usable Vulkan GPU |
+
+The choice is the same graphics backend setting that goes to the guest as
+`ro.boot.vine.gpu`, so the guest and the host agree. `VineRuntime.setDisplayBackend`
+passes it to the bridge. If a presenter cannot start (no EGL, no Vulkan loader, an
+unsupported surface format) or fails three frames in a row, the bridge moves down
+the chain Vulkan, OpenGL ES, software and logs why under "Display" in the in-app
+log. The chain never ends empty, software always works.
+
+Two details keep this safe. Presenters only run on the render thread, because
+EGL contexts and Vulkan swapchains belong to the thread that made them.
+`set_surface` wakes that thread and waits (at most 300 ms) until the old window
+was released, because Android forbids touching a `Surface` after
+`surfaceDestroyed` returns. Vulkan is loaded with `dlopen("libvulkan.so")`, so
+the app still starts on a phone that has no Vulkan, and the OpenGL ES presenter
+never calls `eglTerminate`, because the display is shared with Compose.
+
+The Vulkan probe (`probeVulkan`) creates an instance, looks for a GPU with a
+graphics queue and `VK_KHR_swapchain`, and reports the GPU name and API
+version. `GpuSupport` caches the result for the settings screens, which hide the
+Vulkan choice when the probe fails.
 
 `DisplayPlanner` chooses the guest resolution before the start: either the
 phone's own aspect ratio (so the guest fills the screen) or the largest 9:16
@@ -387,8 +414,11 @@ opt-in and explicitly narrows the isolation boundary for that instance only.
   also drives the helper binary over its protocol with a fake guest agent. It
   needs root, `mke2fs` and a kernel with loop devices. NAT is not covered
   when the host has no `ip` tool, as in the sandbox these were written in. `run_display_tests.sh` covers the framebuffer reader, the
-  pixel conversion and the guest side writer, including a writer racing the
-  reader, and needs nothing but `g++`.
+  pixel conversion, the guest side writer (including a writer racing the
+  reader), the presenter fallback policy and the whole `DisplayBridge` against
+  stubbed Android headers, which proves the fallback to software and the
+  surface handover. It needs nothing but `g++`. The EGL and Vulkan code is
+  compile checked against stub headers there, but only runs on a phone.
 - **Guest agent** (`rom/agent/test/`): the agent's protocol class is plain
   Java, so `run_tests.sh` there checks it on any JDK.
 

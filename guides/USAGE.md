@@ -13,6 +13,7 @@ source, see [BUILDING.md](BUILDING.md); for how it works internally, see
 - [First run](#first-run)
 - [Running an instance](#running-an-instance)
 - [Display and navigation buttons](#display-and-navigation-buttons)
+- [Graphics backend](#graphics-backend)
 - [Home screen shortcuts](#home-screen-shortcuts)
 - [Managing instances](#managing-instances)
 - [Snapshots](#snapshots)
@@ -131,6 +132,27 @@ edge shows them for a moment.
 
 A changed guest resolution applies the next time an instance starts.
 
+## Graphics backend
+
+The graphics backend decides how the guest draws and how your phone shows the
+result. Set the default in **Settings, Virtual machine defaults**, or per
+instance in the instance settings.
+
+| Backend | What it does |
+|---|---|
+| Automatic | The ROM picks the guest renderer, and the phone shows frames through OpenGL ES |
+| OpenGL ES | The guest renders with OpenGL ES and the phone draws frames with an OpenGL ES texture. The safe choice |
+| Vulkan (experimental) | The guest uses Vulkan on Android 10 and newer ROMs and the phone presents frames through a Vulkan swapchain |
+| Software | Everything on the CPU. Slowest, but it works everywhere |
+
+Vulkan only appears in the list on phones where VineOS found a Vulkan GPU it
+can present to. It is marked **Experimental**: it has had little testing on
+real phones, so expect problems such as a black screen or stutter. If Vulkan
+cannot start, VineOS falls back to OpenGL ES, and then to software, by itself.
+The **Logs** screen shows which one is in use, on a line that starts with
+`Display:`. If you hit a Vulkan problem, switch the instance back to Automatic
+and include the log in your bug report.
+
 ## Home screen shortcuts
 
 Put an app from inside an instance on your home screen. Tapping the shortcut
@@ -183,7 +205,7 @@ delete it to free the space.
 |---|---|
 | Appearance | A dark mode switch. Tapping the row (not the switch) opens the dark mode options: follow system, light, dark and AMOLED pure black. Also Material You colors, seven accent colors, animation level (full, reduced, off), haptics and keep screen on |
 | Language | English, French, Spanish, Chinese, Russian and German. The app follows your phone's language and falls back to English |
-| Virtual machine defaults | Memory, storage, CPU cores, graphics backend (automatic, OpenGL ES, Vulkan, software), frame rate limit, performance profile, guest internet, ashmem compatibility, rooted instances, technical info |
+| Virtual machine defaults | Memory, storage, CPU cores, graphics backend (automatic, OpenGL ES, Vulkan (experimental), software), frame rate limit, performance profile, guest internet, ashmem compatibility, rooted instances, technical info |
 | Display | Screen fit, guest resolution, on-screen buttons, camera cutout, see [Display and navigation buttons](#display-and-navigation-buttons) |
 | Engine and privileges | How VineOS gets access (automatic, root, Shizuku), Shizuku status and extra package names for forks, the namespace test, Wireless debugging steps, background keep-alive, battery optimization, idle shutdown, device report |
 | App shortcuts | Put an app of an instance on your home screen, see [Home screen shortcuts](#home-screen-shortcuts) |
