@@ -1,0 +1,22 @@
+{
+  "name": "vineos-documentation",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Documentation for VineOS, an Android-on-Android virtual machine",
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://gitlab.com/Hexadecinull/VineOS/VineOS-Documentation.git"
+  },
+  "scripts": {
+    "lint": "npm run lint:md && npm run lint:links",
+    "lint:md": "markdownlint-cli2",
+    "lint:links": "python3 scripts/check_links.py"
+  },
+  "devDependencies": {
+    "markdownlint-cli2": "^0.23.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
