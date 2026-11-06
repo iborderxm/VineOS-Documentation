@@ -225,20 +225,28 @@ native library folder:
 
 | File | What it is |
 |---|---|
-| `libqemu_system_aarch64.so` | The 64 bit ARM machine |
-| `libqemu_system_arm.so` | The 32 bit ARM machine |
+| `libqemu_system_aarch64.so` | The ARM machines, 64 bit and 32 bit (the 64 bit program also runs the 32 bit boards) |
+| `libqemu_system_x86_64.so` | The x86 machines, 64 bit and 32 bit |
 | `libslirp.so` | User mode networking, loaded by both |
+
+The firmware files QEMU reads at run time (PC BIOS, VGA ROMs, the VNC keymap)
+go to `app/src/main/assets/qemu/` with an `INDEX` and a `QEMU_VERSION` file.
+The app unpacks them once per QEMU version and starts QEMU with `-L` pointing
+there. The list is `QEMU_BLOBS` in `scripts/qemu/versions.env`.
 
 Without them the app still builds and runs. The virtual machine engine then
 reports that the build does not include QEMU, and the container engine is
 unaffected. Only `arm64-v8a` is built, the engine targets arm64 phones.
 
-`scripts/qemu/build-qemu-android.sh` in the app repository builds all three
+`scripts/qemu/build-qemu-android.sh` in the app repository builds them
 with the Android NDK. It runs on Linux x86_64 and downloads everything it
-needs, so it needs network access.
+needs, so it needs network access. `QEMU_VERSION` picks a release, without it
+the newest stable release with a published tarball is used
+(`scripts/qemu/resolve-version.sh`), and `QEMU_FALLBACK_VERSION` in
+`versions.env` is the known good one the CI falls back to.
 
 ```bash
-sudo apt-get install -y curl unzip xz-utils bzip2 git make cmake ninja-build \
+sudo apt-get install -y curl unzip xz-utils bzip2 git gnupg make cmake ninja-build \
     build-essential python3 python3-pip python3-venv pkg-config flex bison \
     autoconf automake libtool gettext libglib2.0-dev libglib2.0-bin \
     libintl-perl patchelf
@@ -255,36 +263,58 @@ What it does, in order:
    own `sigsetjmp` signs the return address on newer ARM cores, which makes the
    jump back fail with an illegal instruction.
 2. Builds PCRE2, libffi, GLib, Pixman and libucontext as static libraries.
-3. Patches QEMU's `coroutine-ucontext.c` to use the `setjmp` pair, and fails
+3. Downloads the QEMU source tarball and checks its signature against the
+   QEMU release signing key (`QEMU_SIGNING_FPR` in `versions.env`, checked by
+   `scripts/qemu/verify-signature.sh`). A tarball that is not signed by that key
+   stops the build.
+4. Patches QEMU's `coroutine-ucontext.c` to use the `setjmp` pair, and fails
    with a clear message if a QEMU update changes the file so the patch no
    longer applies.
-4. Configures and builds QEMU for `aarch64-softmmu` and `arm-softmmu` with TCG,
-   user mode networking (libslirp) and VNC, without a GUI, tools or plugins.
-5. Renames the results to `lib*.so`, sets the `libslirp.so` name, strips them,
+5. Configures and builds QEMU for `aarch64-softmmu` and `x86_64-softmmu` with
+   TCG, user mode networking (libslirp) and VNC, without a GUI, tools or
+   plugins.
+6. Renames the results to `lib*.so`, sets the `libslirp.so` name, strips them,
    and checks that every load segment is aligned to 16 KB, which phones that use
-   16 KB memory pages need.
+   16 KB memory pages need. Then it copies the firmware files.
 
-The output goes to `app/src/main/jniLibs/arm64-v8a/`. The folder is in
+The libraries go to `app/src/main/jniLibs/arm64-v8a/`. The folder is in
 `.gitignore`, so the files are never committed. Rebuild the app afterwards and
 the Gradle packaging extracts them to disk (`useLegacyPackaging`), which is
 required because the files are executables the app starts.
 
-**Checksums.** Every download is checked against
-`scripts/qemu/checksums.sha256`. The file ships empty on purpose: run the
-script once with `--record` on a machine you trust, compare the recorded
-SHA-256 values with the ones the projects publish (QEMU signs its releases),
+**Checksums.** Every download except the QEMU tarball is checked against
+`scripts/qemu/checksums.sha256` (the tarball is checked against the release
+signing key, so it needs no entry and a newer QEMU needs no edit). The file
+ships empty on purpose: run the script once with `--record` on a machine you
+trust, compare the recorded SHA-256 values with the ones the projects publish,
 review the diff and commit the file. After that, a download that does not match
 stops the build, and a download with no entry stops it too. `libucontext` is
 cloned from its repository (`LIBUCONTEXT_REF`, `master` by default) and the
 build log prints the commit that was used, pin it in `versions.env` once you
 have a good build.
 
-**CI.** The `qemu-android` job in the app repository's `.gitlab-ci.yml` runs
-the script in a Debian container. It is **manual** and allowed to fail, so a
-normal pipeline never waits for it. Run it from the pipeline page and download
-the artifact (the three libraries, 30 days). It is not wired into the release
-build yet: put the files in `app/src/main/jniLibs/arm64-v8a/` before the
-release job builds the APK, or extend the release job to download them.
+**CI.** The `qemu-libs` job in the app repository's `.gitlab-ci.yml` runs
+`scripts/qemu/ci.sh` in a Debian container on every pipeline, and `build-debug`,
+`nightly` and `release-build` take its artifacts, so every APK carries QEMU
+without anyone copying files around.
+
+- It resolves the newest stable QEMU release itself on every run, so a QEMU
+  update needs no edit in the repository. If the lookup fails it uses
+  `QEMU_FALLBACK_VERSION`, and if the newest release fails to build (a QEMU
+  update can break the patch in step 4) it builds the fallback and warns.
+- A finished build is stored in the project's package registry under the QEMU
+  version and a hash of the recipe (the build script, `versions.env`,
+  `checksums.sha256` and the shims). The next pipeline with the same version and
+  recipe downloads it in about a minute instead of building for an hour. A new
+  QEMU release, or a change to the recipe, builds again.
+- `release-build` needs the job and fails without the libraries. `build-debug`
+  and `nightly` still build when the job fails, and print a warning, so a broken
+  QEMU build does not block ordinary work.
+- The manual `qemu-android` job builds from scratch, ignores and does not touch
+  the registry, and keeps its output as an artifact (30 days) for anyone who
+  only wants the libraries and the firmware files.
+- `scripts/qemu/test/run_tests.sh` tests the version lookup, the signature check
+  and the cache logic. The `qemu-script-tests` job runs it.
 
 > The recipe follows the one the Podroid project publishes for building QEMU
 > as an Android app library, with the shims written for VineOS. It has not been

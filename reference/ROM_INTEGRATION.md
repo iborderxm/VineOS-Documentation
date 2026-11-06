@@ -264,8 +264,8 @@ have a machine equivalent:
 | Container engine | Virtual machine engine |
 |---|---|
 | `/vine/boot.prop` and `ro.boot.vine.*` | `androidboot.vine.*` tokens on the kernel command line. Android's `init` turns every `androidboot.*` token into `ro.boot.*`, so `androidboot.vine.width=1080` is `ro.boot.vine.width`. Only values without spaces are passed. |
-| `/vine/vinefb` | A `virtio-gpu` device. The phone reads the screen over VNC. |
-| `/vine/agent.sock` | The virtio serial port `/dev/virtio-ports/org.vineos.agent`, same protocol. |
+| `/vine/vinefb` | A `virtio-gpu` device (or VGA on the legacy machines). The phone reads the screen over VNC. |
+| `/vine/agent.sock` | The virtio serial port `/dev/virtio-ports/org.vineos.agent`, same protocol. Not available with `devices: legacy`. |
 | `/vine/boot_completed` | The first frame. The instance is marked running when the screen draws, and the start fails if nothing draws within the boot timeout (120 seconds by default). |
 | Loop mounted images | `virtio-blk` disks in manifest order, then a writable userdata disk. |
 | `eth0` set up by the host | `virtio-net` behind QEMU's user mode NAT with QEMU's default addressing (DHCP, guest `10.0.2.15`, gateway `10.0.2.2`, DNS `10.0.2.3`). |
@@ -291,44 +291,86 @@ have a machine equivalent:
 
 | Field | Required | Meaning |
 |---|---|---|
-| `arch` | yes | `aarch64` or `arm`. `arm` runs the 32 bit machine. |
-| `kernel` | yes | File name of the kernel image in the `.vrom`. |
+| `arch` | yes | `aarch64`, `arm`, `x86_64` or `x86`. The aliases `arm64`, `amd64`, `i386` and `i686` are accepted. 32 bit guests run on the same QEMU program as their 64 bit sibling. |
+| `boot` | no | `kernel` (default) hands `kernel` to QEMU. `disk` starts the PC firmware and boots the first disk or disc, x86 only, and then `kernel`, `initrd` and `cmdline` are not used. |
+| `devices` | no | `virtio` (default) or `legacy`, see the machine table below. |
+| `kernel` | for `boot: kernel` | File name of the kernel image in the `.vrom`. |
 | `initrd` | no | Ramdisk file name, empty or absent for none. |
 | `cmdline` | no | The ROM's kernel command line, printable ASCII, 1536 characters at most. |
-| `disks` | yes | One to eight disks, `readOnly` defaults to true, no file twice. `vda` is the first. |
+| `disks` | yes | One to eight disks, `readOnly` defaults to true, no file twice. `vda` is the first. `cdrom: true` (or a `.iso` file name) makes an optical disc, x86 only. |
 | `userdata` | no | Name of the writable disk, default `userdata.img`. It is created as a sparse file of the instance's storage size and must not be in `disks`. The ROM formats it on first boot. |
-| `machine` | no | QEMU machine, default `virt`. |
-| `cpu` | no | `max` for `aarch64`, `cortex-a15` for `arm`. |
-| `gic` | no | Interrupt controller version, `max` for `aarch64`, `2` for `arm`. |
-| `transport` | no | `pci` (default) or `mmio`. |
+| `machine` | no | QEMU machine. Default `virt` for ARM and `pc` for x86. Allowed: `virt` (virtio ARM), `pc` and `q35` (x86), `versatilepb` and `realview-eb` (legacy ARM boards). |
+| `cpu` | no | `max` by default, `cortex-a15` for `arm` on `virt`, `arm926` on the legacy boards. |
+| `gic` | no | Interrupt controller version of the 64 bit `virt` machine, `max` by default. |
+| `transport` | no | `pci` (default) or `mmio`. `mmio` is for ARM `virt` guests whose kernel has no PCI. x86 and the legacy machines use `pci`. |
+
+The profile is refused as a whole when a combination cannot work:
+
+- `boot: disk` or `cdrom` on an ARM guest, because only the PC firmware boots from a disk.
+- `devices: virtio` on an ARM machine other than `virt`, which has no virtio bus on the other boards.
+- `devices: legacy` on anything but `pc` and `q35` (x86), or `versatilepb` and `realview-eb` with `arch: arm` (ARM), or with more disks than the machine takes (3 on x86, 6 on the ARM boards).
+- An x86 machine other than `pc` or `q35`, or an x86 guest with `mmio`.
 
 File names are plain names (letters, digits, dot, dash, underscore, 64
 characters at most, no `..`). Anything else makes VineOS ignore the profile, so
 a hostile manifest never reaches the QEMU command line.
-`rom/package_vrom.py --vm-kernel` writes the section for you.
+`rom/package_vrom.py --vm-kernel` (or `--vm-boot disk`) writes the section for you.
+
+### Machines
+
+| Machine | Used for | Devices |
+|---|---|---|
+| `virt` (ARM, `devices: virtio`) | Android 5 to 17 on ARM | `virtio-blk`, `virtio-gpu`, `virtio-keyboard`, `virtio-tablet`, `virtio-rng`, `virtio-net`, the agent port. PCI or MMIO. |
+| `pc`, `q35` (x86, `devices: virtio`) | Android 5 to 17 on x86 | The same virtio devices on PCI, `virtio-vga` for the display. A disc is an IDE CD-ROM. |
+| `pc`, `q35` (x86, `devices: legacy`) | Android-x86 releases, old x86 kernels | IDE disks and CD-ROMs, VGA, `e1000`, PS/2 keyboard and mouse, a USB tablet. No agent port. |
+| `versatilepb`, `realview-eb` (`devices: legacy`) | Android 1.0 to 4.x on ARM, old kernels | LSI SCSI disks, the board's display, PS/2 input, `rtl8139`. One core, at most 256 MB. No agent port. |
+
+IDE and SCSI disks cannot be attached read only, so on the legacy machines a
+read only disk is a throwaway copy on write layer in the instance's run folder:
+the guest can write to it, the file in the `.vrom` never changes.
+
+### Which Android versions
+
+The engine does not check the Android version. A ROM boots when its kernel or
+disk fits one of the machines above:
+
+| Android | Fits |
+|---|---|
+| 5 to 17, ARM and x86 | `virtio` on `virt`, `pc` or `q35`, with a kernel that has the virtio drivers |
+| Android-x86 releases 1.6 to 9.0 | `boot: disk`, `devices: legacy`, the release ISO as a `cdrom` disk |
+| 1.0 to 4.x on ARM | `devices: legacy` with `arch: arm` and a kernel built for `versatilepb` or `realview-eb` |
+
+This is what the engine can start. No row has been tried with a real ROM. The
+Android 1.x and 2.x emulator kernels target QEMU's `goldfish` machine, which
+upstream QEMU does not have, so those versions need a kernel built for one of
+the boards in the table.
 
 ### What the kernel and the ROM need
 
-- Drivers for `virtio-blk`, `virtio-gpu` (with DRM framebuffer console or a
-  display stack that can use it), `virtio-input`, `virtio-rng`, `virtio-net`,
-  `virtio-console` (for the agent port) and the PCI host controller of QEMU's
-  `virt` machine, or the MMIO transport for kernels without PCI.
-- A PL011 UART on `ttyAMA0` for the console. VineOS keeps what the kernel prints
-  as `console.log` in the instance folder and shows the tail in the diagnostics.
+- With `devices: virtio`: drivers for `virtio-blk`, `virtio-gpu` (with DRM
+  framebuffer console or a display stack that can use it), `virtio-input`,
+  `virtio-rng`, `virtio-net`, `virtio-console` (for the agent port) and the PCI
+  host controller of the machine, or the MMIO transport for ARM kernels
+  without PCI.
+- A serial console for the boot log: PL011 on `ttyAMA0` on ARM, `ttyS0` on x86.
+  VineOS keeps what the kernel prints as `console.log` in the instance folder
+  and shows the tail in the diagnostics.
 - A key layout that maps Escape to `BACK`, Super to `HOME` and Menu to
   `APP_SWITCH`, for guests that run without the agent.
-- `VineAgent` started at boot, listening on the serial port, for real
-  multi-touch, text, the app list, icons, shortcuts and clean power off
-  (VineOS sends `exec` with `setprop sys.powerctl shutdown`, see the agent
-  protocol above).
+- `VineAgent` started at boot, listening on the serial port (virtio machines
+  only), for real multi-touch, text, the app list, icons, shortcuts and clean
+  power off (VineOS sends `exec` with `setprop sys.powerctl shutdown`, see the
+  agent protocol above).
 
 ### Honest limits
 
 - The engine is emulation. It has no KVM, so a ROM runs at a fraction of its
   native speed.
-- No Android image has booted in it yet. The command line, the manifest checks,
-  the agent protocol, the VNC bridge and the QMP client are tested on a host.
+- No Android image has booted in it yet. The manifest checks, the agent
+  protocol, the VNC bridge and the QMP client are tested on a host, and the
+  command line of every machine above was started on a real QEMU (x86 with a
+  Linux kernel that saw its disks, the ARM machines without a kernel).
   Treat the first real boot as the open milestone.
-- The app needs the QEMU libraries. Without them the app says the build does
+- The app needs the QEMU libraries and firmware files. Without them the app says the build does
   not include QEMU for that architecture, see
   [Building](../guides/BUILDING.md#building-the-qemu-machine-engine).

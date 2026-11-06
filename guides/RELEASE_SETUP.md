@@ -114,7 +114,9 @@ unrelated to this form.
      pre-1.0. GitLab releases have no pre-release flag, so `true` adds
      "(pre-release)" to the release title and a note to the description.
 4. Run it. The pipeline: validates the tag format (`release-validate`),
-   then builds and signs the release APK and builds a debug APK alongside
+   builds the QEMU libraries in parallel (`qemu-libs`, a minute when the
+   registry already has this QEMU version, about an hour when it does not,
+   and a failure stops the release), then builds and signs the release APK and builds a debug APK alongside
    it (`release-build`), running `testDebugUnitTest` and
    `testReleaseUnitTest` as a safety gate before either build, verifying
    the release APK's signature with `apksigner`, uploading both APKs to
