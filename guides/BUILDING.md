@@ -258,7 +258,9 @@ What it does, in order:
 
 1. Downloads the NDK (version in `scripts/qemu/versions.env`) and builds small
    replacements for what Bionic lacks at API 26: `iconv`, `shm_open` (through
-   `memfd_create`), and a `setjmp` and `longjmp` pair without pointer
+   `memfd_create`), `statx` (Bionic declares it from API 30, so a wrapper calls
+   libc's where the phone has it and reports "not supported" elsewhere, which
+   QEMU handles), and a `setjmp` and `longjmp` pair without pointer
    authentication. QEMU's coroutines switch stacks across threads, and Bionic's
    own `sigsetjmp` signs the return address on newer ARM cores, which makes the
    jump back fail with an illegal instruction.
@@ -319,7 +321,9 @@ without anyone copying files around.
 > The recipe follows the one the Podroid project publishes for building QEMU
 > as an Android app library, with the shims written for VineOS. It has not been
 > run to completion in the environment this documentation was written in. The
-> first build will probably need small fixes, please report them.
+> first build will probably need small fixes, please report them. The build
+> runs `make -k`, so one failed run lists every compile error instead of the
+> first one.
 
 Check the result on a phone with **Settings, Developer, Check the machine
 engine**. It runs each library with `--version`.
