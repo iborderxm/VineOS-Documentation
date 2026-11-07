@@ -336,9 +336,17 @@ distributed via the VineOS CDN.
 
 ### Overview
 
-VineOS ROM images are minimal AOSP system images targeting the `ranchu`
-virtual device (the same reference virtual hardware platform the Android
-Emulator uses), stripped of unnecessary apps and services.
+This section builds a container ROM: a minimal AOSP system image, stripped of
+unnecessary apps and services, with the guest side kit from the `rom/` folder
+added. The container engine needs root or Shizuku with root, and no ROM has
+booted this way yet.
+
+Two things are not container ROMs. Google's Android Emulator system images
+(the SDK's `system-images` packages and AVD images) are built for the
+emulator's own goldfish and ranchu hardware, which upstream QEMU does not have,
+so they boot in neither engine. And a ROM that boots without root is built
+differently: for Android 7.1.2 from Android-x86 see
+[`rom/ANDROID_X86.md`](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/blob/main/rom/ANDROID_X86.md).
 
 ### Host requirements
 
@@ -402,11 +410,16 @@ vine-rom-7.vrom
 └── ramdisk.img      Android ramdisk, contains /init
 ```
 
-VineOS unpacks `ramdisk.img`, `vendor.img` and `system.img` and ignores
-anything else in the archive. A `kernel` entry is skipped on purpose: guests
-run on the phone's kernel, so a ROM kernel would never be used. When the
-manifest lists a `sha256` for a file, the app checks it while unpacking and
-refuses a damaged file.
+For the container engine VineOS unpacks `ramdisk.img`, `vendor.img` and
+`system.img`. The container engine runs guests on the phone's kernel, so a
+kernel in the archive is not used by it. A ROM that boots without root adds a
+`vm` section and an `engines` list to the manifest, and the app then also
+unpacks the files that section names (a kernel, disks or an ISO), see
+[ROM_INTEGRATION.md](../reference/ROM_INTEGRATION.md#booting-as-a-virtual-machine).
+Without `engines` a ROM is container only, which is why a `.vrom` with just the
+fields below cannot boot without root. Anything else in the archive is
+ignored. When the manifest lists a `sha256` for a file, the app checks it while
+unpacking and refuses a damaged file.
 
 `manifest.json`:
 
@@ -440,7 +453,10 @@ python3 rom/package_vrom.py out/target/product/generic_arm64/ vine-rom-7.vrom \
 ```
 
 The folder given first must hold `ramdisk.img` and `system.img`, and may hold
-`vendor.img`.
+`vendor.img`. This makes a container ROM. The `--vm-*` options add the profile
+for the engine that needs no root, and `--compress` deflates the files (they
+are stored as they are by default). The options are listed in the
+[ROM kit README](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/blob/main/rom/README.md).
 
 ## CI/CD
 

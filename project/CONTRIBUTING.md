@@ -271,11 +271,11 @@ highest-impact ways to help. See [BUILDING.md](../guides/BUILDING.md#building-ao
 for the full guide. Requirements for acceptance:
 
 - Built from AOSP source, no proprietary blobs in the system image
-- Targets the `ranchu` virtual device
+- Boots in VineOS, either as a container ROM (the init patch and display writer from the `rom/` kit) or with a `vm` profile for a machine VineOS offers. Google's Android Emulator system images (goldfish, ranchu) do not qualify, see [ANDROID_X86.md](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/blob/main/rom/ANDROID_X86.md) for a ROM that boots without root
 - Minimal size: strip unnecessary system apps, keep only what's needed to boot and run user apps
-- Dual ABI: both `arm64-v8a` and `armeabi-v7a` libraries in `/system/lib` and `/system/lib64`
+- Dual ABI for ARM ROMs: both `arm64-v8a` and `armeabi-v7a` libraries in `/system/lib` and `/system/lib64`
 - SHA-256 hash provided for integrity verification
-- A VineOS-specific `init.vine.rc` for VM setup
+- For container ROMs, a VineOS-specific `init.vine.rc`
 - No Google Play Services in the base image; GApps are an optional layer the user installs
 
 ROM images are distributed via the VineOS CDN and contributed through a

@@ -279,7 +279,7 @@ have a machine equivalent:
     "arch": "aarch64",
     "kernel": "Image",
     "initrd": "ramdisk.img",
-    "cmdline": "console=ttyAMA0 androidboot.hardware=ranchu",
+    "cmdline": "console=ttyAMA0 androidboot.hardware=myrom",
     "disks": [
       { "file": "system.img", "readOnly": true },
       { "file": "vendor.img", "readOnly": true }
@@ -340,10 +340,13 @@ disk fits one of the machines above:
 | Android-x86 releases 1.6 to 9.0 | `boot: disk`, `devices: legacy`, the release ISO as a `cdrom` disk |
 | 1.0 to 4.x on ARM | `devices: legacy` with `arch: arm` and a kernel built for `versatilepb` or `realview-eb` |
 
-This is what the engine can start. No row has been tried with a real ROM. The
-Android 1.x and 2.x emulator kernels target QEMU's `goldfish` machine, which
-upstream QEMU does not have, so those versions need a kernel built for one of
-the boards in the table.
+This is what the engine can start. No row has been tried with a real ROM.
+Google's emulator kernels and system images, from Android 1.x to the current
+ones, target QEMU's `goldfish` or `ranchu` machines, which upstream QEMU does
+not have, so an emulator image does not boot here at any version. A ROM needs a
+kernel and a userspace built for one of the machines in the table. For Android-x86
+the main repository has a worked example,
+[`rom/ANDROID_X86.md`](https://gitlab.com/Hexadecinull/VineOS/VineOS/-/blob/main/rom/ANDROID_X86.md).
 
 ### What the kernel and the ROM need
 
